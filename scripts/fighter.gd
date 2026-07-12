@@ -460,9 +460,14 @@ func _tick_launched(dt: float, is_ko: bool) -> void:
 	if is_ko and ko_rest:
 		return
 	if in_water:
-		# in acqua si affonda piano, frenati dall'attrito
-		vel.y += 240.0 * dt
-		vel = vel.move_toward(Vector2.ZERO, 340.0 * dt)
+		# in acqua il colpo viene smorzato: si affonda verso una velocita'
+		# terminale (mai in stallo a mezz'acqua) e dopo poco si riprende
+		# il controllo galleggiando
+		vel.x = move_toward(vel.x, 0.0, 320.0 * dt)
+		vel.y = move_toward(vel.y, 130.0, 520.0 * dt)
+		if not is_ko and st >= 0.55:
+			invuln = 0.6
+			state = St.MOVE
 	else:
 		vel.y += 880.0 * dt
 		vel.x = move_toward(vel.x, 0.0, 60.0 * dt)
