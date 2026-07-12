@@ -5,9 +5,14 @@ extends Node2D
 # Le pose native guardano a DESTRA: flip_h quando facing == -1 (sinistra).
 # Fanno eccezione i pugni, che hanno un frame dedicato per direzione.
 
-enum St { INTRO, MOVE, ATTACK, BLAST, BEAM_CHARGE, BEAM_FIRE, DASH, ROLL, GUARD, CHARGE, HURT, LAUNCHED, DOWN, KO, WIN, LAND }
+enum St { INTRO, MOVE, ATTACK, BLAST, BEAM_CHARGE, BEAM_FIRE, DASH, ROLL, GUARD, CHARGE, HURT, LAUNCHED, DOWN, KO, WIN, LAND, ESCAPE }
 
 const FLOOR_Y := 400.0
+# fuga dalla combo: subiti ESCAPE_HITS colpi di fila, tenere premuto l'attacco
+# (J) spezza la combo con uno scoppio di ki e lascia invulnerabili per un po'
+const ESCAPE_HITS := 3
+const ESCAPE_T := 0.38
+const ESCAPE_INVULN := 1.5
 const ARENA_X := 1150.0
 const CEIL_Y := -420.0
 const SEP_X := 760.0
@@ -80,6 +85,7 @@ var bubble_t := 0.0
 var spr: AnimatedSprite2D
 var aura: Sprite2D
 var cur_anim := ""
+var net_cmd := {}  # partita online: ultimo comando ricevuto (vedi execute_inputs)
 
 
 func setup(g: Node2D, pal: String, disp_name: String, ctrl) -> void:
@@ -171,7 +177,15 @@ func _face_enemy() -> void:
 
 static func _empty_input() -> Dictionary:
 	return {"move": Vector2.ZERO, "attack": false, "blast": false, "beam": false,
-		"dash": false, "roll": false, "guard": false, "charge": false}
+		"dash": false, "roll": false, "guard": false, "charge": false, "attack_held": false}
+
+
+# Partita online: il MatchManager consegna qui i comandi del giocatore
+# (input locale o pacchetto RPC dell'avversario); il NetController li
+# restituira' al poll() del prossimo tick. Cosi' il lottatore non legge mai
+# Input direttamente e la stessa via alimenta comandi locali e di rete.
+func execute_inputs(inputs: Dictionary) -> void:
+	net_cmd = inputs
 
 
 # --- ciclo principale ---------------------------------------------------
@@ -210,10 +224,11 @@ func tick(dt: float) -> void:
 		St.ROLL: _tick_roll(dt)
 		St.GUARD: _tick_guard(dt, inp)
 		St.CHARGE: _tick_charge(dt, inp)
-		St.HURT: _tick_hurt(dt)
-		St.LAUNCHED: _tick_launched(dt, false)
-		St.KO: _tick_launched(dt, true)
+		St.HURT: _tick_hurt(dt, inp)
+		St.LAUNCHED: _tick_launched(dt, inp, false)
+		St.KO: _tick_launched(dt, inp, true)
 		St.DOWN: _tick_down(dt)
+		St.ESCAPE: _tick_escape(dt)
 		_: pass
 
 	# limiti arena (sul lago il fondale scende sotto la riva)
@@ -245,7 +260,8 @@ func tick(dt: float) -> void:
 		if bubble_t <= 0.0:
 			bubble_t = randf_range(0.35, 0.7)
 			# niente bolle rivelatrici per chi e' nascosto alla vista del giocatore
-			if self == game.p1 or game.can_see(game.p1, self):
+			var viewer: Fighter = game.local_fighter()
+			if self == viewer or game.can_see(viewer, self):
 				game.spawn_bubble(center() + Vector2(randf_range(-8.0, 8.0), randf_range(-14.0, 4.0)))
 
 	_update_visual()
@@ -449,15 +465,21 @@ func _tick_land(_dt: float) -> void:
 		state = St.MOVE
 
 
-func _tick_hurt(dt: float) -> void:
+func _tick_hurt(dt: float, inp: Dictionary) -> void:
+	if chain_n >= ESCAPE_HITS and inp.get("attack_held", false):
+		_burst_escape()
+		return
 	vel = vel.move_toward(Vector2.ZERO, 700.0 * dt)
 	position += vel * dt
 	if st >= hurt_t:
 		state = St.MOVE
 
 
-func _tick_launched(dt: float, is_ko: bool) -> void:
+func _tick_launched(dt: float, inp: Dictionary, is_ko: bool) -> void:
 	if is_ko and ko_rest:
+		return
+	if not is_ko and chain_n >= ESCAPE_HITS and inp.get("attack_held", false):
+		_burst_escape()
 		return
 	if in_water:
 		# in acqua il colpo viene smorzato: si affonda verso una velocita'
@@ -496,6 +518,25 @@ func _tick_launched(dt: float, is_ko: bool) -> void:
 func _tick_down(_dt: float) -> void:
 	if st >= 0.5:
 		invuln = 0.7
+		state = St.MOVE
+
+
+# scoppio di liberazione: esce dallo stordimento, azzera la combo subita e
+# resta invulnerabile per ESCAPE_INVULN secondi dopo lo scoppio
+func _burst_escape() -> void:
+	state = St.ESCAPE
+	st = 0.0
+	vel = Vector2.ZERO
+	chain_n = 0
+	chain_t = 0.0
+	invuln = ESCAPE_T + ESCAPE_INVULN
+	aura.visible = true
+	game.fighter_escaped(self)
+
+
+func _tick_escape(_dt: float) -> void:
+	if st >= ESCAPE_T:
+		aura.visible = false
 		state = St.MOVE
 
 
@@ -552,9 +593,11 @@ func play_anim(a: String) -> void:
 
 func _update_visual() -> void:
 	# l'avversario immerso sparisce del tutto dalla vista, a meno che anche il
-	# giocatore non sia in acqua (fuori dal combattimento resta sempre visibile)
-	if game.phase == "fight" and self != game.p1:
-		visible = game.can_see(game.p1, self)
+	# giocatore non sia in acqua (fuori dal combattimento resta sempre visibile);
+	# online il punto di vista e' il lottatore locale (p2 per l'ospite)
+	var pov: Fighter = game.local_fighter()
+	if game.phase == "fight" and self != pov:
+		visible = game.can_see(pov, self)
 	else:
 		visible = true
 	var vis_a := 1.0
@@ -599,6 +642,8 @@ func _update_visual() -> void:
 			play_anim("fall" if ko_rest else "tumble")
 		St.DOWN:
 			play_anim("fall")
+		St.ESCAPE:
+			play_anim("windup")
 		St.WIN, St.INTRO:
 			play_anim("taunt")
 	# arte nativa verso destra: si specchia guardando a sinistra, tranne i

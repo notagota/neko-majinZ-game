@@ -13,6 +13,7 @@ const FXScript := preload("res://scripts/one_shot_fx.gd")
 const HUDScript := preload("res://scripts/hud.gd")
 const SfxScript := preload("res://scripts/sfx_bank.gd")
 const WaterScript := preload("res://scripts/water_zone.gd")
+const MatchScript := preload("res://scripts/match_manager.gd")
 
 const FLOOR_Y := 400.0
 # mappa "lake": la costa rocciosa a sinistra scende a gradoni dolci nel lago,
@@ -39,9 +40,12 @@ var lay_clouds: Node2D
 var lay_mount: Node2D
 var lay_mesa: Node2D
 
+var flash_layer: CanvasLayer
 var phase := "intro1"
 var phase_t := 0.0
 var mode := "versus"
+var online := false
+var reconciling := false  # replay del netcode in corso: sopprimi effetti e danni
 var menu_sel := 0
 var music: AudioStreamPlayer
 var volume := 1.0
@@ -79,16 +83,22 @@ func _ready() -> void:
 	cam.make_current()
 	sfx = SfxScript.new()
 	add_child(sfx)
-	# musichetta del menu (loop impostato a runtime sul WAV importato)
+	# musichetta del menu (loop impostato a runtime sul WAV importato):
+	# loop_end e' in campioni-frame, da ricavare da durata x frequenza —
+	# data.size()/2 vale solo per PCM mono e tagliava la canzone a meta'
 	var ms = load("res://assets/music/menu.wav")
 	if ms is AudioStreamWAV:
 		ms.loop_mode = AudioStreamWAV.LOOP_FORWARD
 		ms.loop_begin = 0
-		ms.loop_end = ms.data.size() / 2
+		ms.loop_end = int(ms.get_length() * ms.mix_rate)
 	music = AudioStreamPlayer.new()
 	music.stream = ms
 	music.volume_db = -8.0
 	add_child(music)
+	# strato per i flash a tutto schermo (burst/lines), sotto la HUD (layer 10)
+	flash_layer = CanvasLayer.new()
+	flash_layer.layer = 5
+	add_child(flash_layer)
 	var layer := CanvasLayer.new()
 	layer.layer = 10
 	add_child(layer)
@@ -98,6 +108,7 @@ func _ready() -> void:
 	# argomenti di debug: --demo (IA vs IA), --shot=percorso (screenshot e chiudi)
 	var skip_menu := false
 	var dbg_mapsel := false
+	var goto_netmenu := false
 	for a in OS.get_cmdline_user_args():
 		if a == "--demo":
 			p1.controller = AIC.new()
@@ -128,6 +139,22 @@ func _ready() -> void:
 				shot_t = 3.0
 		elif a.begins_with("--shotdelay="):
 			shot_t = float(a.substr(12))
+		elif a.begins_with("--nethost=") or a.begins_with("--netjoin="):
+			goto_netmenu = true  # test online: vai dritto al menu multiplayer
+	if goto_netmenu and not NetworkManager.is_online():
+		# solo al primo avvio: quando l'arena viene ricaricata a connessione
+		# avvenuta il flag e' ancora negli argomenti e va ignorato.
+		# deferred: dentro _ready l'albero e' occupato e il cambio diretto fallisce
+		get_tree().change_scene_to_file.call_deferred("res://scenes/multiplayer_menu.tscn")
+		return
+	if NetworkManager.is_online():
+		# arena caricata dal menu online: partita 1v1 tra persone, il
+		# MatchManager assegna autorita' e controller di rete ai lottatori
+		online = true
+		skip_menu = true
+		var mm := MatchScript.new()
+		mm.name = "Match"
+		add_child(mm)
 	if skip_menu:
 		_start_match()
 	else:
@@ -374,23 +401,28 @@ func _enter_menu() -> void:
 
 func _tick_menu() -> void:
 	if Input.is_action_just_pressed("p_up"):
-		menu_sel = (menu_sel + 2) % 3
+		menu_sel = (menu_sel + 3) % 4
 		sfx.play("select")
 	if Input.is_action_just_pressed("p_down"):
-		menu_sel = (menu_sel + 1) % 3
+		menu_sel = (menu_sel + 1) % 4
 		sfx.play("select")
 	# sulla voce VOLUME sinistra/destra regolano il livello
-	if menu_sel == 2:
+	if menu_sel == 3:
 		if Input.is_action_just_pressed("p_left"):
 			_change_volume(-0.1)
 		if Input.is_action_just_pressed("p_right"):
 			_change_volume(0.1)
 	if Input.is_action_just_pressed("p_accept") or Input.is_action_just_pressed("p_attack"):
-		if menu_sel == 2:
+		if menu_sel == 3:
 			# INVIO sul volume: muta / ripristina
 			volume = 1.0 if volume <= 0.01 else 0.0
 			_apply_volume()
 			sfx.play("select")
+			return
+		if menu_sel == 2:
+			# partita online: menu di connessione in una scena dedicata
+			sfx.play("select", 1.2)
+			get_tree().change_scene_to_file("res://scenes/multiplayer_menu.tscn")
 			return
 		mode = "versus" if menu_sel == 0 else "training"
 		map_sel = 0 if map == "desert" else 1
@@ -429,7 +461,8 @@ func _set_msg(m: String, sub := "", life := 1.2) -> void:
 func _start_match() -> void:
 	wins = [0, 0]
 	round_num = 1
-	p2.controller = DummyC.new() if mode == "training" else AIC.new()
+	if not online:  # online i controller di rete li assegna il MatchManager
+		p2.controller = DummyC.new() if mode == "training" else AIC.new()
 	_start_round()
 
 
@@ -490,6 +523,8 @@ func on_ko(victim: Fighter) -> void:
 	_set_msg("K.O.", "", 2.4)
 	sfx.play("ko")
 	shake(6.0)
+	# linee di velocita' a tutto schermo sul colpo decisivo
+	spawn_fx("lines", victim.center(), {"life": 0.55, "add": true})
 
 
 func _end_round() -> void:
@@ -510,9 +545,14 @@ func _end_round() -> void:
 func _match_over() -> void:
 	phase = "match_end"
 	phase_t = 0.0
-	var player_won: bool = wins[0] >= 2
-	_set_msg("HAI VINTO!" if player_won else "VITTORIA DELLA CPU",
-		"INVIO: rivincita   R: riavvia   ESC: menu", 9999.0)
+	var p1_won: bool = wins[0] >= 2
+	if online:
+		# la vittoria va giudicata dal punto di vista del lottatore locale
+		var you_won: bool = p1_won == (local_fighter() == p1)
+		_set_msg("HAI VINTO!" if you_won else "HAI PERSO...", "ESC: torna al menu", 9999.0)
+	else:
+		_set_msg("HAI VINTO!" if p1_won else "VITTORIA DELLA CPU",
+			"INVIO: rivincita   R: riavvia   ESC: menu", 9999.0)
 	sfx.play("round", 0.8)
 
 
@@ -595,21 +635,28 @@ func _physics_process(delta: float) -> void:
 			_tick_mapsel()
 		if phase == "menu" or phase == "mapsel":  # ancora nei menu
 			phase_t += delta
+			msg_t += delta
+			if msg != "" and msg_t > msg_life:
+				msg = ""
+				msg_sub = ""
 			_tick_shot(delta)
 			_tick_camera(delta)
 			return
 	if Input.is_action_just_pressed("p_menu"):
 		paused = false
+		if online:
+			_exit_online()  # chiude la connessione e ripristina i controller
 		_enter_menu()
 		return
-	if Input.is_action_just_pressed("p_pause"):
+	# online niente pausa/riavvio/rivincita locali: manderebbero fuori sincrono
+	if Input.is_action_just_pressed("p_pause") and not online:
 		paused = not paused
 		sfx.play("select")
-	if Input.is_action_just_pressed("p_restart"):
+	if Input.is_action_just_pressed("p_restart") and not online:
 		paused = false
 		_start_match()
 		return
-	if phase == "match_end" and Input.is_action_just_pressed("p_accept"):
+	if phase == "match_end" and Input.is_action_just_pressed("p_accept") and not online:
 		_start_match()
 		return
 	if paused:
@@ -694,13 +741,76 @@ func _tick_camera(delta: float) -> void:
 
 
 func shake(a: float) -> void:
+	if reconciling:
+		return
 	shake_amp = max(shake_amp, a)
+
+
+# --- partita online ------------------------------------------------------------
+
+# il lottatore controllato su QUESTA macchina (per l'ospite online e' p2):
+# e' il punto di vista per lo stealth acquatico e per l'esito del match
+func local_fighter() -> Fighter:
+	if online and NetworkManager.local_player() == 2:
+		return p2
+	return p1
+
+
+func _exit_online() -> void:
+	online = false
+	NetworkManager.close()
+	var mm := get_node_or_null("Match")
+	if mm != null:
+		mm.queue_free()
+	# ripristina i controller e i nomi della modalita' locale
+	p1.controller = HumanC.new()
+	p1.fighter_name = "NEKO MAJIN Z"
+	p2.controller = AIC.new()
+	p2.is_cpu = true
+	p2.fighter_name = "NEKO MAJIN (CPU)"
+
+
+# chiamata dal MatchManager quando cade la connessione con l'avversario
+func net_opponent_left() -> void:
+	if not online:
+		return
+	_exit_online()
+	_enter_menu()
+	_set_msg("AVVERSARIO DISCONNESSO", "", 2.5)
+
+
+# scoppio di liberazione dalla combo (vedi Fighter._burst_escape): flash a
+# tutto schermo e respinta dell'aggressore vicino, senza danni
+func fighter_escaped(f: Fighter) -> void:
+	print("[fight] %s si libera dalla combo!" % f.fighter_name)
+	spawn_fx("burst", f.center(), {"life": 0.4, "add": true})
+	spawn_fx("lines", f.center(), {"life": 0.45, "add": true, "mod": Color(1, 1, 1, 0.9)})
+	if reconciling:
+		return  # nel replay lo scoppio originale ha gia' fatto tutto
+	sfx.play("kick", 0.6)
+	sfx.play("charge", 1.6, -5.0)
+	shake(4.0)
+	freeze_t = max(freeze_t, 0.08)
+	var e := f.enemy
+	if e == null or e.state in [Fighter.St.KO, Fighter.St.DOWN]:
+		return
+	if f.center().distance_to(e.center()) < 150.0:
+		var dir := signf(e.position.x - f.position.x)
+		if dir == 0.0:
+			dir = float(-f.facing)
+		e.state = Fighter.St.LAUNCHED
+		e.st = 0.0
+		e.vel = Vector2(dir * 300.0, -170.0)
+		e.aura.visible = false
+		spawn_fx("alert", e.position + Vector2(0, -74), {"life": 0.35, "scale": 0.55})
 
 
 # --- risoluzione dei colpi ---------------------------------------------------
 
 func try_hit(attacker: Fighter, r: Rect2, dmg: float, opts: Dictionary = {}) -> String:
-	if phase != "fight":
+	# durante un replay di riconciliazione i colpi non vengono risolti:
+	# il danno reale e' gia' stato applicato dalla simulazione originale
+	if phase != "fight" or reconciling:
 		return "miss"
 	var victim := attacker.enemy
 	if victim == null or victim.invuln > 0.0:
@@ -739,10 +849,42 @@ func try_hit(attacker: Fighter, r: Rect2, dmg: float, opts: Dictionary = {}) -> 
 # --- spawn di entita dinamiche ------------------------------------------------
 
 func spawn_fx(fx_name: String, pos: Vector2, opts: Dictionary = {}) -> void:
+	# burst e lines sono "impact frame" in stile anime: quando vengono usati
+	# si espandono fino a coprire l'intera scena (finestra 1440x810)
+	if fx_name == "burst" or fx_name == "lines":
+		_spawn_screen_fx(fx_name, opts)
+		return
 	spawn_fx_tex(load("res://assets/sprites/fx/%s.png" % fx_name), pos, opts)
 
 
+# flash a schermo intero: parte gia' grande al centro dello schermo e si
+# espande oltre i bordi mentre svanisce (spazio schermo: ignora la camera)
+func _spawn_screen_fx(fx_name: String, opts: Dictionary) -> void:
+	if reconciling:
+		return
+	var tex: Texture2D = load("res://assets/sprites/fx/%s.png" % fx_name)
+	var fx := FXScript.new()
+	fx.texture = tex
+	fx.position = Vector2(240, 135)  # centro del viewport 480x270
+	fx.life = opts.get("life", 0.3)
+	# scala che copre tutta la scena, raggiunta a meta' vita
+	var cover: float = maxf(480.0 / tex.get_width(), 270.0 / tex.get_height())
+	fx.scale = Vector2.ONE * cover * 0.55
+	fx.grow = cover * 1.1 / fx.life
+	if opts.get("add", false):
+		var mat := CanvasItemMaterial.new()
+		mat.blend_mode = CanvasItemMaterial.BLEND_MODE_ADD
+		fx.material = mat
+	if opts.has("mod"):
+		fx.modulate = opts["mod"]
+	fx.start_a = fx.modulate.a
+	flash_layer.add_child(fx)
+	actors.append(fx)
+
+
 func spawn_fx_tex(tex: Texture2D, pos: Vector2, opts: Dictionary = {}) -> void:
+	if reconciling:
+		return
 	var fx := FXScript.new()
 	fx.texture = tex
 	fx.position = pos
@@ -764,7 +906,7 @@ func spawn_fx_tex(tex: Texture2D, pos: Vector2, opts: Dictionary = {}) -> void:
 
 
 func spawn_afterimage(f: Fighter) -> void:
-	if f.spr == null or f.spr.sprite_frames == null or not f.visible:
+	if reconciling or f.spr == null or f.spr.sprite_frames == null or not f.visible:
 		return
 	var tex := f.spr.sprite_frames.get_frame_texture(f.spr.animation, f.spr.frame)
 	if tex == null:
@@ -783,6 +925,8 @@ func spawn_afterimage(f: Fighter) -> void:
 
 
 func spawn_blast(f: Fighter) -> void:
+	if reconciling:
+		return  # nel replay il proiettile originale esiste gia': niente doppioni
 	var b := KiBlastScript.new()
 	b.setup(f)
 	if f.is_cpu:
@@ -794,6 +938,8 @@ func spawn_blast(f: Fighter) -> void:
 
 
 func spawn_beam(f: Fighter) -> void:
+	if reconciling:
+		return
 	var b := BeamScript.new()
 	b.setup(f)
 	actor_root.add_child(b)

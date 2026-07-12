@@ -9,6 +9,8 @@ extends Node2D
 #    "dentro" l'acqua.
 
 const X_RIGHT := 1330.0
+const GROUND_TEX := preload("res://assets/bg/bg2_ground.png")
+const BLEND_W := 56.0   # larghezza del raccordo sfumato tra un gradone e l'altro
 
 var game: Node2D
 var front := false
@@ -18,6 +20,8 @@ var t := 0.0
 func _ready() -> void:
 	if front:
 		z_index = 40
+	# serve per tegolare GROUND_TEX oltre il bordo destro (UV > 1)
+	texture_repeat = CanvasItem.TEXTURE_REPEAT_ENABLED
 
 
 func _process(dt: float) -> void:
@@ -77,26 +81,43 @@ func _draw() -> void:
 
 
 func _draw_coast(by: float) -> void:
-	var rim := Color(0.87, 0.79, 0.60)
-	var face := Color(0.42, 0.35, 0.26)
-	var prev_fy: float = game.FLOOR_Y - 8.0
-	for s in _slabs():
-		var x0: float = s[0]
-		var x1: float = s[1]
-		var fy: float = s[2]
-		# corpo del gradone, piu' scuro e freddo con la profondita'
-		var depth: float = clampf((fy - game.FLOOR_Y) / (by - game.FLOOR_Y), 0.0, 1.0)
-		var body := Color(0.70, 0.60, 0.44).lerp(Color(0.24, 0.31, 0.36), depth)
-		draw_rect(Rect2(x0, fy - 8.0, x1 - x0, by + 110.0 - fy), body)
-		# bordo superiore illuminato del gradone
-		draw_rect(Rect2(x0, fy - 8.0, x1 - x0, 3.0), rim.lerp(body, depth * 0.55))
-		# parete verticale del dislivello (lato sinistro del gradone)
-		if fy - 8.0 > prev_fy:
-			draw_rect(Rect2(x0 - 3.0, prev_fy, 6.0, fy - 8.0 - prev_fy + 3.0), face)
-		prev_fy = fy - 8.0
-		# qualche crepa orizzontale per dare consistenza rocciosa
-		var seed := int(x0)
-		for c in range(3):
-			var cx: float = x0 + fposmod(seed * 37.7 + c * 61.3, maxf(x1 - x0 - 30.0, 8.0))
-			var cy: float = fy + 14.0 + fposmod(seed * 17.3 + c * 43.9, maxf(by + 70.0 - fy - 20.0, 8.0))
-			draw_rect(Rect2(cx, cy, 14.0 + 8.0 * (c % 2), 2.0), body.darkened(0.25))
+	# Ogni gradone e' rivestito con bg2_ground.png (bordo roccioso in cima,
+	# sabbia sotto) ancorata alla propria sommita', come i tile della riva.
+	# Per non dare stacchi tra una texture e l'altra, la texture di ogni
+	# gradone "sborda" sul successivo dissolvendosi (quad con alpha sfumato).
+	var fl: float = game.FLOOR_Y
+	var bot: float = by + 110.0
+	var slabs := _slabs()
+	var tints: Array = []
+	var anchors: Array = []
+	for i in range(slabs.size()):
+		# tinta: sabbia piena in superficie, sempre piu' fredda e scura in fondo
+		var depth: float = clampf((slabs[i][2] - fl) / (by - fl), 0.0, 1.0)
+		tints.append(Color(1, 1, 1).lerp(Color(0.38, 0.50, 0.62), depth))
+		# il primo lembo e' ancorato al reticolo dei tile della riva (x = -512)
+		# cosi' la texture prosegue senza cucitura dal terreno di sinistra
+		anchors.append(Vector2(-512.0 if i == 0 else slabs[i][0], slabs[i][2] - 8.0))
+	for i in range(slabs.size()):
+		var x0: float = anchors[i].x if i == 0 else slabs[i][0]
+		_tex_quad(Rect2(x0, anchors[i].y, slabs[i][1] - x0, bot - anchors[i].y),
+			anchors[i], tints[i], 1.0, 1.0)
+		# raccordo: il gradone precedente si prolunga su questo e sfuma via,
+		# coprendo anche la parete del dislivello con una discesa morbida
+		if i > 0:
+			_tex_quad(Rect2(slabs[i][0], anchors[i - 1].y, BLEND_W, bot - anchors[i - 1].y),
+				anchors[i - 1], tints[i - 1], 1.0, 0.0)
+
+
+# quad texturizzato con UV nel reticolo di `anchor` e alpha che scorre
+# da sinistra (a_left) a destra (a_right): il mattone delle sfumature
+func _tex_quad(r: Rect2, anchor: Vector2, tint: Color, a_left: float, a_right: float) -> void:
+	var tw := float(GROUND_TEX.get_width())
+	var th := float(GROUND_TEX.get_height())
+	var pts := PackedVector2Array([r.position, Vector2(r.end.x, r.position.y),
+		r.end, Vector2(r.position.x, r.end.y)])
+	var uvs := PackedVector2Array()
+	for p in pts:
+		uvs.append(Vector2((p.x - anchor.x) / tw, (p.y - anchor.y) / th))
+	var cl := Color(tint.r, tint.g, tint.b, tint.a * a_left)
+	var cr := Color(tint.r, tint.g, tint.b, tint.a * a_right)
+	draw_polygon(pts, PackedColorArray([cl, cr, cr, cl]), uvs, GROUND_TEX)

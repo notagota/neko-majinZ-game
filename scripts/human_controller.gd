@@ -14,4 +14,5 @@ func poll(_f, _dt: float) -> Dictionary:
 		"roll": Input.is_action_just_pressed("p_roll"),
 		"guard": Input.is_action_pressed("p_guard"),
 		"charge": Input.is_action_pressed("p_charge"),
+		"attack_held": Input.is_action_pressed("p_attack"),
 	}

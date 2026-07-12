@@ -6,4 +6,4 @@ extends RefCounted
 
 func poll(_f, _dt: float) -> Dictionary:
 	return {"move": Vector2.ZERO, "attack": false, "blast": false, "beam": false,
-		"dash": false, "roll": false, "guard": false, "charge": false}
+		"dash": false, "roll": false, "guard": false, "charge": false, "attack_held": false}

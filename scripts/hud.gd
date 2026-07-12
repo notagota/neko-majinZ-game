@@ -5,7 +5,7 @@ extends Control
 # contatore combo, messaggi centrali e schermata di pausa.
 
 const HINT1 := "WASD/frecce: vola e cammina   J: combo   K: sfera ki   L: raggio (2 tacche di ki)"
-const HINT2 := "I: scatto   U: palla rotolante   SPAZIO: parata   H: carica ki   1: pausa   ESC: menu"
+const HINT2 := "I: scatto   U: palla   SPAZIO: parata   H: carica ki   tieni J sotto combo: FUGA   ESC: menu"
 
 var game: Node2D
 var port1: Texture2D
@@ -94,11 +94,11 @@ func _draw_menu() -> void:
 	var ph2 := port2.get_height() * (pw / port2.get_width())
 	draw_texture_rect(port2, Rect2(Vector2(26, 62 - ph2 / 2), Vector2(pw, ph2)), false)
 	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
-	# voci del menu (la terza e' il volume, regolabile con A/D)
+	# voci del menu (l'ultima e' il volume, regolabile con A/D)
 	var vol_label := "VOLUME: MUTO" if game.volume <= 0.01 else "VOLUME %d%%" % int(game.volume * 100.0 + 0.5)
-	var opts := ["COMBATTIMENTO 1v1", "ALLENAMENTO", vol_label]
-	for i in range(3):
-		var y := 148.0 + i * 24.0
+	var opts := ["COMBATTIMENTO 1v1", "ALLENAMENTO", "ONLINE 1v1", vol_label]
+	for i in range(4):
+		var y := 142.0 + i * 22.0
 		var sel: bool = game.menu_sel == i
 		var col := Color(1, 0.82, 0.15) if sel else Color(1, 1, 1, 0.9)
 		if sel:
@@ -106,13 +106,16 @@ func _draw_menu() -> void:
 			_text(">", Vector2(240 - 90 + 3.0 * sin(game.phase_t * 7.0), y), 12, col, "l")
 			_text("<", Vector2(240 + 90 - 3.0 * sin(game.phase_t * 7.0), y), 12, col, "r")
 		_text(opts[i], Vector2(240, y), 12, col, "c")
-		if i == 2:
+		if i == 3:
 			# barretta del volume sotto la voce
 			var bw := 90.0
 			draw_rect(Rect2(240 - bw / 2.0, y + 5.0, bw, 4.0), Color(0, 0, 0, 0.6))
 			draw_rect(Rect2(240 - bw / 2.0, y + 5.0, bw * game.volume, 4.0),
 				Color(1, 0.82, 0.15) if sel else Color(0.6, 0.75, 0.9))
-	_text("W/S: scegli    A/D: regola    INVIO o J: conferma", Vector2(240, 240), 8, Color(1, 1, 1, 0.85), "c")
+	# avvisi (es. "AVVERSARIO DISCONNESSO" tornando da una partita online)
+	if game.msg != "":
+		_text(game.msg, Vector2(240, 232), 8, Color(1, 0.45, 0.3), "c")
+	_text("W/S: scegli    A/D: regola    INVIO o J: conferma", Vector2(240, 244), 8, Color(1, 1, 1, 0.85), "c")
 	_text("in gioco: ESC menu   1 pausa   2/3 volume", Vector2(240, 253), 7, Color(1, 1, 1, 0.55), "c")
 
 

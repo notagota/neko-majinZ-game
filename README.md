@@ -11,7 +11,9 @@ All'avvio un **menù** (con musichetta chiptune) permette di scegliere tra:
 
 - **COMBATTIMENTO 1v1** — match al meglio dei 3 round contro la CPU;
 - **ALLENAMENTO** — bersaglio fermo, niente timer né round, HP e ki di entrambi si
-  rigenerano poco dopo ogni scambio: perfetto per provare le mosse.
+  rigenerano poco dopo ogni scambio: perfetto per provare le mosse;
+- **ONLINE 1v1** — sfida un'altra persona in P2P via WebRTC, senza server dedicati
+  (vedi la sezione *Online 1v1*).
 
 Scelta la modalità, una seconda schermata permette di **scegliere la mappa**:
 
@@ -23,11 +25,14 @@ Scelta la modalità, una seconda schermata permette di **scegliere la mappa**:
   a meno che anche quest'ultimo non entri in acqua: la CPU perde il bersaglio ("!!"),
   smette di attaccare e pattuglia l'ultima posizione nota; sfere di ki e scatti smettono
   di puntarti. In acqua ci si muove più lenti, da fermi si galleggia verso l'alto,
-  i colpi subiti affondano piano (attrito), le sfere di ki si spengono in superficie
-  con uno schizzo, e immergersi/riemergere produce splash e bollicine.
+  i colpi subiti affondano piano (attrito), e immergersi/riemergere produce splash e
+  bollicine. Le **sfere di ki attraversano la superficie** (in entrambe le direzioni)
+  sollevando uno schizzo: anche chi è nascosto sott'acqua **si tradisce sparando**.
+  I gradoni della costa sono rivestiti con la texture della spiaggia, sfumata da un
+  gradino all'altro.
 
 Nel menù (titolo con logo in stile Dragon Ball): W/S per scegliere, INVIO o J per
-confermare, ESC per tornare indietro; la terza voce regola il **volume** (A/D, INVIO = muto).
+confermare, ESC per tornare indietro; l'ultima voce regola il **volume** (A/D, INVIO = muto).
 In gioco, **ESC** riporta al menù, **1** mette in pausa, **2/3** abbassano/alzano il volume.
 
 ## Come si avvia
@@ -49,6 +54,7 @@ oppure aprire la cartella come progetto nell'editor Godot e premere F5.
 |---|---|
 | **WASD / frecce** | Movimento e volo libero (in aria si fluttua, stile SSW2); atterrando si esegue una breve animazione di atterraggio |
 | **J** | Combo corpo a corpo (J, J, J: pugno → pugno forte → spinta a due palmi che lancia) |
+| **J (tieni premuto mentre subisci una combo)** | **Fuga**: dopo 3 colpi subiti di fila, uno scoppio di ki spezza la combo, respinge l'aggressore vicino e ti lascia **invulnerabile per ~2 secondi** (anche la CPU a volte lo usa) |
 | **K** | Sfera di ki (costa 15 ki, leggera ricerca del bersaglio) |
 | **L** | Raggio energetico (costa 200 ki = 2 tacche, danno enorme): animazione di carica in 8 pose, poi il raggio si estende e colpisce con la punta, con pioggia di scintille sull'impatto |
 | **I** | Scatto homing verso l'avversario (costa 25 ki, colpisce al contatto) |
@@ -67,8 +73,38 @@ Back/Select = menù.
 - HP 300, ki 300 (3 tacche). Il ki si rigenera lentamente, si guadagna coi colpi e si carica con H.
 - Round da 99 secondi; allo scadere vince chi ha più HP. Vince il match chi conquista 2 round.
 - Hitstop, slow-motion sul KO, scossa della camera, contatore combo, barra HP con danno ritardato.
+- **Impact frame in stile anime**: i flash d'impatto (`burst`) e le linee di velocità (`lines`)
+  si espandono a coprire l'intera scena (1440×810) sui colpi pesanti, sul KO e sulla fuga.
 - La camera inquadra entrambi i lottatori e zooma in/out dinamicamente (stile SSW2).
 - La CPU vola, para, schiva i raggi, carica il ki, fa combo, scatti e sfere.
+
+## Online 1v1 (P2P WebRTC)
+
+Connessione **diretta tra i due giocatori** (WebRTC + `WebRTCMultiplayerPeer`), senza
+server dedicati: serve solo scambiarsi due codici testuali (per chat/Discord/email).
+
+1. Un giocatore sceglie **OSPITA (HOST)**: il gioco genera un **codice offerta** — COPIA
+   e invialo all'avversario.
+2. L'altro sceglie **PARTECIPA (JOIN)**, incolla il codice, preme **GENERA RISPOSTA** e
+   rimanda il **codice risposta** all'host.
+3. L'host incolla la risposta e preme **CONNETTI**: appena il collegamento si apre
+   entrambi entrano nell'arena (host = P1). ESC abbandona la partita.
+
+Note tecniche: l'host comanda P1 e l'ospite P2 (`set_multiplayer_authority`); ogni frame
+l'input locale viene compresso in una bitmask e scambiato con RPC *unreliable*
+(`match_manager.gd` → `fighter.execute_inputs()`); niente pausa/riavvio in online.
+Il netcode è **predittivo**: gli input sono bufferizzati per numero di frame, ogni
+pacchetto ripete gli ultimi 5 frame (ridondanza contro il packet loss), se l'input
+dell'avversario non è ancora arrivato si assume che ripeta l'ultimo ricevuto e, quando
+un pacchetto smentisce una predizione, il personaggio remoto viene riportato allo
+snapshot del frame sbagliato e risimulato fino al presente (riconciliazione silenziosa:
+niente danni/effetti/suoni doppi). Il gioco non si blocca mai in attesa della rete. Richiede l'estensione `addons/webrtc_native` (inclusa, build
+Windows x86_64; per altre piattaforme scaricare le librerie dalla release GitHub di
+`godotengine/webrtc-native`). Il traffico passa in P2P; i server STUN pubblici di Google
+(più istanze, per ridondanza) servono solo a scoprire il proprio indirizzo. In LAN funziona
+anche senza internet. Dietro firewall aziendali o NAT simmetrici molto restrittivi il P2P
+diretto può essere impossibile: in `network_manager.gd` c'è una variabile `TURN_SERVER`
+commentata, pronta per le credenziali di un relay TURN gratuito (es. Metered.ca o Xirsys).
 
 ## Flag di debug (dopo `--`)
 
@@ -81,13 +117,26 @@ godot --path . -- --lake                 # combattimento sulla mappa del lago
 godot --path . -- --divetest             # (col lago) P1 parte immerso: test stealth
 godot --path . -- --mapsel               # apre direttamente la scelta mappa
 godot --path . -- --shot=out.png --shotdelay=3.5   # screenshot automatico e chiudi
+godot --path . -- --nethost=C:/tmp/net           # test online: host automatico via file
+godot --path . -- --netjoin=C:/tmp/net           # test online: ospite automatico via file
 ```
+
+(`--nethost`/`--netjoin` scambiano offerta e risposta tramite `offer.json`/`answer.json`
+nella cartella indicata: lanciando due istanze sulla stessa cartella si connettono da sole.
+Aggiungendo `--netprobe` i giocatori generano input sintetici che cambiano di continuo:
+serve a collaudare predizione e riconciliazioni, contate nei log ogni 5 secondi.)
 
 ## Struttura
 
 - `scripts/game.gd` — direttore: menù, modalità, arena, round, colpi, camera, effetti, input map
-- `scripts/fighter.gd` — macchina a stati del lottatore (16 stati)
-- `scripts/ai_controller.gd` / `human_controller.gd` / `dummy_controller.gd` — controller intercambiabili
+- `scripts/fighter.gd` — macchina a stati del lottatore (16 stati); `execute_inputs()` riceve i comandi di rete
+- `scripts/ai_controller.gd` / `human_controller.gd` / `dummy_controller.gd` / `net_controller.gd` — controller intercambiabili
+- `scripts/network_manager.gd` (autoload) — P2P WebRTC: signaling offer/answer/ICE in JSON,
+  bitmask di input, buffer e snapshot pronti per il rollback netcode
+- `scripts/multiplayer_menu.gd` + `scenes/multiplayer_menu.tscn` — schermata di connessione online
+- `scripts/match_manager.gd` — nell'arena online: autorità di rete, netcode predittivo
+  (buffer per tick, ridondanza 5 frame, predizione e riconciliazione con replay silenziato)
+- `addons/webrtc_native/` — estensione GDExtension WebRTC (librerie Windows x86_64)
 - `scripts/ki_blast.gd`, `energy_beam.gd`, `one_shot_fx.gd`, `hud.gd`, `sfx_bank.gd`
 - `scripts/water_zone.gd` — il lago: fossa scura dietro ai lottatori e velo d'acqua
   animato davanti (superficie ondulata, luccichii)
@@ -97,7 +146,7 @@ godot --path . -- --shot=out.png --shotdelay=3.5   # screenshot automatico e chi
 - `assets/sprites/fx|ui`, `assets/bg`, `assets/sfx` — effetti, ritratti, sfondi e suoni generati;
   il raggio è composto da `beam_head` (sfera alle mani), `beam_body1` (tratto tegolabile),
   `beam_body2` (tratto fiammeggiante) e `beam_tail` (punta, dove sta la collisione)
-- `assets/music/menu.wav` — musichetta chiptune del menù (loop, generata via script)
+- `assets/music/menu.wav` — canzone del menù (loop sull'intera durata del brano)
 - `tools/*.cs` — script C# (PowerShell `Add-Type`) della pipeline degli asset:
   `SpriteDetect` (bounding box), `Extract` (ritaglio + palette swap da Z.png),
   `PaletteSwapDir` (rigenera z2 da z1), `BgGen` (sfondi deserto), `LakeGen` (sfondo e

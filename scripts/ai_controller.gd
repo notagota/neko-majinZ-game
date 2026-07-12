@@ -13,18 +13,26 @@ var strafe_dir := 1.0
 var reacted := false
 var last_seen := Vector2.ZERO
 var lost := false
+var esc_roll := -1.0
 
 
 func poll(f, dt: float) -> Dictionary:
 	var out := {"move": Vector2.ZERO, "attack": false, "blast": false, "beam": false,
-		"dash": false, "roll": false, "guard": false, "charge": false}
+		"dash": false, "roll": false, "guard": false, "charge": false, "attack_held": false}
 	var e = f.enemy
 	if e == null or f.game.phase != "fight":
 		return out
 	if f.state in [Fighter.St.HURT, Fighter.St.LAUNCHED, Fighter.St.DOWN, Fighter.St.KO]:
 		seq.clear()
 		plan = "idle"
+		# sotto una combo prolungata a volte tiene premuto l'attacco per la
+		# fuga (stessa meccanica del giocatore); decide una volta per combo
+		if f.chain_n >= Fighter.ESCAPE_HITS:
+			if esc_roll < 0.0:
+				esc_roll = randf()
+			out.attack_held = esc_roll < 0.5
 		return out
+	esc_roll = -1.0
 
 	hold_guard = max(0.0, hold_guard - dt)
 

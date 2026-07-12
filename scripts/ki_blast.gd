@@ -34,19 +34,24 @@ func tick(dt: float) -> void:
 		var des := (owner_f.enemy.center() - position).normalized() * 430.0
 		vel = vel.rotated(clamp(vel.angle_to(des), -2.4 * dt, 2.4 * dt))
 	position += vel * dt
-	# l'energia si spegne sfrigolando quando attraversa la superficie dell'acqua
+	# la sfera attraversa la superficie dell'acqua e prosegue: lo schizzo
+	# tradisce la posizione di chi spara anche se e' nascosto sott'acqua
 	var w2: bool = owner_f.game.in_water_point(position)
 	if w2 != wet:
+		wet = w2
 		owner_f.game.splash_at(position.x, false)
-		dead = true
-		return
+	# velatura azzurra finche' viaggia immersa (senza toccare la tinta CPU)
+	self_modulate = Color(0.6, 0.85, 1.0) if wet else Color(1, 1, 1)
 	rotation += 6.0 * dt
 	trail_t -= dt
 	if trail_t <= 0.0:
 		trail_t = 0.035
 		owner_f.game.spawn_fx_tex(texture, position,
 			{"life": 0.18, "scale": scale.x * 0.85, "add": true, "mod": modulate * Color(1, 1, 1, 0.4)})
-	if t >= 2.2 or abs(position.x) > 1350.0 or position.y > 500.0 or position.y < -650.0:
+	# il limite inferiore segue il terreno: nel lago la sfera puo' scendere
+	# fino al fondale (e risalirne) invece di sparire a mezz'acqua
+	if t >= 2.2 or abs(position.x) > 1350.0 \
+			or position.y > owner_f.game.floor_at(position.x) + 90.0 or position.y < -650.0:
 		dead = true
 		return
 	var r := Rect2(position - Vector2(9, 9), Vector2(18, 18))

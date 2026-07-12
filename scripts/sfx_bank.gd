@@ -7,6 +7,7 @@ const NAMES := ["hit", "kick", "blast", "beam", "charge", "dash", "guard", "ko",
 
 var streams := {}
 var players: Array = []
+var muted := false  # silenzia i replay di riconciliazione del netcode
 
 
 func _ready() -> void:
@@ -19,7 +20,7 @@ func _ready() -> void:
 
 
 func play(n: String, pitch: float = 1.0, vol: float = 0.0) -> void:
-	if not streams.has(n):
+	if muted or not streams.has(n):
 		return
 	for p in players:
 		if not p.playing:
