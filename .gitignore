@@ -1,0 +1,8 @@
+# cache dell'editor Godot
+.godot/
+
+# build e pacchetti (pubblicati come release, non nel repo)
+dist/
+
+# archivi template scaricati
+*.tpz
