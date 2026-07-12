@@ -1,0 +1,16 @@
+NEKO MAJIN Z — SUPERSONIC CLASH
+================================
+
+Come si gioca:
+  1) Estrai TUTTO lo zip in una cartella (non solo l'exe!)
+  2) Avvia NekoMajinZ.exe — non serve installare nulla
+
+IMPORTANTE per l'ONLINE 1v1:
+  il file libwebrtc_native.windows.template_release.x86_64.dll deve
+  restare NELLA STESSA CARTELLA dell'exe. Senza, il gioco funziona
+  lo stesso ma il menu ONLINE 1v1 dara' "WebRTC non disponibile".
+
+Se Windows SmartScreen avvisa: "Ulteriori informazioni" -> "Esegui comunque"
+(il gioco non e' firmato, e' un progetto fan-made senza scopo di lucro).
+
+Sito e aggiornamenti: https://notagota.github.io/neko-majinZ-game/

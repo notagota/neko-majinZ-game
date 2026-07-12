@@ -124,7 +124,7 @@ func _on_host_pressed() -> void:
 	answer_in.text = ""
 	var err := NetworkManager.host_start()
 	if err != OK:
-		_set_status("ERRORE %d: WebRTC non disponibile (manca webrtc-native?)" % err)
+		_set_status("ERRORE %d: WebRTC non disponibile: la DLL webrtc_native deve stare accanto all'exe (riestrai TUTTO lo zip)" % err)
 		return
 	_set_status("genero il codice offerta...")
 
@@ -146,7 +146,10 @@ func _make_answer() -> void:
 		return
 	var err := NetworkManager.guest_start(txt)
 	if err != OK:
-		_set_status("codice dell'host non valido (errore %d)" % err)
+		if err == ERR_INVALID_DATA:
+			_set_status("codice dell'host non valido (errore %d)" % err)
+		else:
+			_set_status("ERRORE %d: WebRTC non disponibile: la DLL webrtc_native deve stare accanto all'exe (riestrai TUTTO lo zip)" % err)
 		return
 	_set_status("genero la risposta...")
 

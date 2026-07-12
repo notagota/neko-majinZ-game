@@ -37,8 +37,11 @@ In gioco, **ESC** riporta al menù, **1** mette in pausa, **2/3** abbassano/alza
 
 ## Come si avvia
 
-Eseguibile standalone (da inviare ad amici): `dist/NekoMajinZ.exe` — basta il file exe,
-il gioco è tutto incorporato.
+Eseguibile standalone (da inviare ad amici): `dist/NekoMajinZ.exe` **insieme a**
+`dist/libwebrtc_native.windows.template_release.x86_64.dll` — il gioco è tutto incorporato
+nell'exe, ma la DLL (estensione GDExtension, che l'export copia accanto all'eseguibile)
+serve per l'**ONLINE 1v1** e deve restare nella stessa cartella. Lo zip delle release le
+contiene entrambe: **estrarre tutto**, non solo l'exe.
 
 Dal progetto:
 

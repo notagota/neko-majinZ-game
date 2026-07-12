@@ -104,8 +104,10 @@
       ⬇ Scarica per Windows
     </a>
     <div class="meta" id="relinfo">
-      Ultima versione — zip con eseguibile singolo (~35 MB), Windows 10/11 a 64 bit.<br>
-      Estrai e avvia <code>NekoMajinZ.exe</code>: non serve installare nulla.
+      Ultima versione — zip per Windows 10/11 a 64 bit, non serve installare nulla.<br>
+      <strong>Estrai TUTTO lo zip</strong> nella stessa cartella e avvia <code>NekoMajinZ.exe</code>:
+      la libreria <code>libwebrtc_native…dll</code> inclusa serve per l'<strong>ONLINE 1v1</strong>
+      e deve restare accanto all'exe.
     </div>
   </div>
 
@@ -181,8 +183,10 @@
       var info = document.getElementById("relinfo");
       info.innerHTML = "Ultima versione: <strong>" + rel.tag_name + "</strong>" +
         (d ? " (" + d + ")" : "") +
-        " — zip con eseguibile singolo (~35 MB), Windows 10/11 a 64 bit.<br>" +
-        "Estrai e avvia <code>NekoMajinZ.exe</code>: non serve installare nulla.";
+        " — zip per Windows 10/11 a 64 bit, non serve installare nulla.<br>" +
+        "<strong>Estrai TUTTO lo zip</strong> nella stessa cartella e avvia <code>NekoMajinZ.exe</code>: " +
+        "la libreria <code>libwebrtc_native…dll</code> inclusa serve per l'<strong>ONLINE 1v1</strong> " +
+        "e deve restare accanto all'exe.";
     })
     .catch(function () {});
 </script>
