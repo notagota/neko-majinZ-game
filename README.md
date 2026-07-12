@@ -7,7 +7,7 @@ Picchiaduro 2D in stile **Dragon Ball FighterZ / DBZ Supersonic Warriors 2**, re
 Si combatte contro una CPU (Neko Majin giallo, palette swap generata via script) in un match
 al meglio dei 3 round, con **volo libero** in tutta l'arena e **attacchi energetici**.
 
-All'avvio un **menù** (con musichetta chiptune) permette di scegliere tra:
+All'avvio un **menù** (con musica in loop) permette di scegliere tra:
 
 - **COMBATTIMENTO 1v1** — match al meglio dei 3 round contro la CPU;
 - **ALLENAMENTO** — bersaglio fermo, niente timer né round, HP e ki di entrambi si
@@ -74,7 +74,10 @@ Back/Select = menù.
 - Round da 99 secondi; allo scadere vince chi ha più HP. Vince il match chi conquista 2 round.
 - Hitstop, slow-motion sul KO, scossa della camera, contatore combo, barra HP con danno ritardato.
 - **Impact frame in stile anime**: i flash d'impatto (`burst`) e le linee di velocità (`lines`)
-  si espandono a coprire l'intera scena (1440×810) sui colpi pesanti, sul KO e sulla fuga.
+  si espandono a coprire l'intera scena (1440×810) **solo sui colpi pesanti**: combo che
+  lancia, impatto del raggio, KO e fuga dalla combo.
+- **Musiche chiptune di battaglia**, una per mappa: incalzante in La minore (160 BPM) nel
+  deserto, arpeggi con eco in Re minore (140 BPM) sul lago; in loop per tutto il match.
 - La camera inquadra entrambi i lottatori e zooma in/out dinamicamente (stile SSW2).
 - La CPU vola, para, schiva i raggi, carica il ki, fa combo, scatti e sfere.
 
@@ -146,9 +149,10 @@ serve a collaudare predizione e riconciliazioni, contate nei log ogni 5 secondi.
 - `assets/sprites/fx|ui`, `assets/bg`, `assets/sfx` — effetti, ritratti, sfondi e suoni generati;
   il raggio è composto da `beam_head` (sfera alle mani), `beam_body1` (tratto tegolabile),
   `beam_body2` (tratto fiammeggiante) e `beam_tail` (punta, dove sta la collisione)
-- `assets/music/menu.wav` — canzone del menù (loop sull'intera durata del brano)
+- `assets/music/menu.wav` — canzone del menù (loop sull'intera durata del brano);
+  `battle_desert.wav` / `battle_lake.wav` — musiche chiptune di battaglia (da `tools/BattleGen.cs`)
 - `tools/*.cs` — script C# (PowerShell `Add-Type`) della pipeline degli asset:
   `SpriteDetect` (bounding box), `Extract` (ritaglio + palette swap da Z.png),
   `PaletteSwapDir` (rigenera z2 da z1), `BgGen` (sfondi deserto), `LakeGen` (sfondo e
   riva del lago da sshaohmarubg.gif + splash.wav), `SfxGen` (WAV sintetizzati),
-  `MusicGen` (musichetta del menù)
+  `MusicGen` (musichetta chiptune originale del menù), `BattleGen` (musiche di battaglia)

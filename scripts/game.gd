@@ -41,6 +41,8 @@ var lay_mount: Node2D
 var lay_mesa: Node2D
 
 var flash_layer: CanvasLayer
+var menu_stream: AudioStream
+var battle_streams := {}
 var phase := "intro1"
 var phase_t := 0.0
 var mode := "versus"
@@ -83,16 +85,14 @@ func _ready() -> void:
 	cam.make_current()
 	sfx = SfxScript.new()
 	add_child(sfx)
-	# musichetta del menu (loop impostato a runtime sul WAV importato):
-	# loop_end e' in campioni-frame, da ricavare da durata x frequenza —
-	# data.size()/2 vale solo per PCM mono e tagliava la canzone a meta'
-	var ms = load("res://assets/music/menu.wav")
-	if ms is AudioStreamWAV:
-		ms.loop_mode = AudioStreamWAV.LOOP_FORWARD
-		ms.loop_begin = 0
-		ms.loop_end = int(ms.get_length() * ms.mix_rate)
+	# musiche in loop: canzone del menu + tracce chiptune di battaglia
+	# (tools/BattleGen.cs), una per mappa; un solo player le alterna
+	menu_stream = _load_loop("res://assets/music/menu.wav")
+	battle_streams = {
+		"desert": _load_loop("res://assets/music/battle_desert.wav"),
+		"lake": _load_loop("res://assets/music/battle_lake.wav"),
+	}
 	music = AudioStreamPlayer.new()
-	music.stream = ms
 	music.volume_db = -8.0
 	add_child(music)
 	# strato per i flash a tutto schermo (burst/lines), sotto la HUD (layer 10)
@@ -359,6 +359,28 @@ func _build_fighters() -> void:
 	add_child(actor_root)
 
 
+# --- musica -------------------------------------------------------------------
+
+# carica un WAV impostandone il loop sull'intera durata: loop_end e' in
+# campioni-frame (durata x frequenza) — data.size()/2 vale solo per PCM mono
+func _load_loop(path: String) -> AudioStream:
+	var ms = load(path)
+	if ms is AudioStreamWAV:
+		ms.loop_mode = AudioStreamWAV.LOOP_FORWARD
+		ms.loop_begin = 0
+		ms.loop_end = int(ms.get_length() * ms.mix_rate)
+	return ms
+
+
+# cambia traccia solo se serve: rivincite e riavvii non fanno ripartire il brano
+func _play_music(stream: AudioStream, db := -8.0) -> void:
+	music.volume_db = db
+	if music.stream == stream and music.playing:
+		return
+	music.stream = stream
+	music.play()
+
+
 # --- menu -------------------------------------------------------------------
 
 func _apply_volume() -> void:
@@ -395,8 +417,7 @@ func _enter_menu() -> void:
 	else:
 		p1.reset(Vector2(-400, FLOOR_Y), 1)
 		p2.reset(Vector2(-160, FLOOR_Y), -1)
-	if music != null and not music.playing:
-		music.play()
+	_play_music(menu_stream)
 
 
 func _tick_menu() -> void:
@@ -444,7 +465,6 @@ func _tick_mapsel() -> void:
 		var m := "desert" if map_sel == 0 else "lake"
 		if m != map:
 			_build_world(m)
-		music.stop()
 		sfx.play("round")
 		_start_match()
 
@@ -463,6 +483,8 @@ func _start_match() -> void:
 	round_num = 1
 	if not online:  # online i controller di rete li assegna il MatchManager
 		p2.controller = DummyC.new() if mode == "training" else AIC.new()
+	# musichetta chiptune di battaglia della mappa (un po' sotto gli effetti)
+	_play_music(battle_streams[map], -10.0)
 	_start_round()
 
 
@@ -524,7 +546,7 @@ func on_ko(victim: Fighter) -> void:
 	sfx.play("ko")
 	shake(6.0)
 	# linee di velocita' a tutto schermo sul colpo decisivo
-	spawn_fx("lines", victim.center(), {"life": 0.55, "add": true})
+	spawn_fx("lines", victim.center(), {"life": 0.55, "add": true, "screen": true})
 
 
 func _end_round() -> void:
@@ -538,6 +560,7 @@ func _end_round() -> void:
 		if w.state != Fighter.St.KO:
 			w.state = Fighter.St.WIN
 			w.st = 0.0
+			w.aura.visible = false  # spegni l'aura se stava caricando o fuggendo
 	else:
 		_set_msg("PAREGGIO", "", 1.5)
 
@@ -783,8 +806,8 @@ func net_opponent_left() -> void:
 # tutto schermo e respinta dell'aggressore vicino, senza danni
 func fighter_escaped(f: Fighter) -> void:
 	print("[fight] %s si libera dalla combo!" % f.fighter_name)
-	spawn_fx("burst", f.center(), {"life": 0.4, "add": true})
-	spawn_fx("lines", f.center(), {"life": 0.45, "add": true, "mod": Color(1, 1, 1, 0.9)})
+	spawn_fx("burst", f.center(), {"life": 0.4, "add": true, "screen": true})
+	spawn_fx("lines", f.center(), {"life": 0.45, "add": true, "mod": Color(1, 1, 1, 0.9), "screen": true})
 	if reconciling:
 		return  # nel replay lo scoppio originale ha gia' fatto tutto
 	sfx.play("kick", 0.6)
@@ -834,7 +857,7 @@ func try_hit(attacker: Fighter, r: Rect2, dmg: float, opts: Dictionary = {}) -> 
 	victim.take_hit(dmg, opts)
 	var heavy: bool = opts.get("heavy", false)
 	if heavy:
-		spawn_fx("burst", contact, {"life": 0.3, "add": true, "grow": 1.5, "scale": 0.7})
+		spawn_fx("burst", contact, {"life": 0.3, "add": true, "screen": true})
 		spawn_fx("alert", victim.position + Vector2(0, -74), {"life": 0.35, "scale": 0.55})
 	else:
 		spawn_fx("spark_0", contact, {"life": 0.22, "add": true, "grow": 2.0, "spin": 3.0})
@@ -849,9 +872,10 @@ func try_hit(attacker: Fighter, r: Rect2, dmg: float, opts: Dictionary = {}) -> 
 # --- spawn di entita dinamiche ------------------------------------------------
 
 func spawn_fx(fx_name: String, pos: Vector2, opts: Dictionary = {}) -> void:
-	# burst e lines sono "impact frame" in stile anime: quando vengono usati
-	# si espandono fino a coprire l'intera scena (finestra 1440x810)
-	if fx_name == "burst" or fx_name == "lines":
+	# con "screen": true burst e lines diventano "impact frame" in stile anime
+	# che coprono l'intera scena (1440x810): riservato ai colpi pesanti
+	# (combo che lancia, impatto del raggio, KO, fuga dalla combo)
+	if opts.get("screen", false) and (fx_name == "burst" or fx_name == "lines"):
 		_spawn_screen_fx(fx_name, opts)
 		return
 	spawn_fx_tex(load("res://assets/sprites/fx/%s.png" % fx_name), pos, opts)

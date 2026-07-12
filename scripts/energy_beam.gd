@@ -90,7 +90,7 @@ func tick(dt: float) -> void:
 
 func _impact_sparks(tip: Vector2, full_hit: bool) -> void:
 	var g = owner_f.game
-	g.spawn_fx("burst", tip, {"life": 0.32, "add": true, "grow": 2.2, "scale": 0.8})
+	g.spawn_fx("burst", tip, {"life": 0.32, "add": true, "screen": true})
 	for i in range(6):
 		var a := randf_range(0.0, TAU)
 		g.spawn_fx("spark_0" if i % 2 == 0 else "spark_1", tip,
