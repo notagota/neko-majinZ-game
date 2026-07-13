@@ -21,18 +21,25 @@ func setup(f: Fighter) -> void:
 	# parte dai palmi della posa beam_08 (~23 px sopra i piedi)
 	position = f.position + Vector2(f.facing * 28.0, -23.0)
 	wet = f.game.in_water_point(position)
-	var target := position + Vector2(f.facing * 100.0, 0.0)
-	if f.enemy != null and f.game.can_see(f, f.enemy):
-		target = f.enemy.center()
+	var target: Vector2 = position + Vector2(f.facing * 100.0, 0.0)
+	# punta il nemico se rilevabile, altrimenti la sua immagine-esca (inganno)
+	var aim: Variant = f.game.aim_point(f, f.enemy)
+	if aim != null:
+		target = aim
 	vel = (target - position).normalized() * 430.0
 
 
 func tick(dt: float) -> void:
 	t += dt
-	# leggera ricerca del bersaglio nei primi istanti (solo se rilevabile)
-	if t < 0.35 and owner_f.enemy != null and owner_f.game.can_see(owner_f, owner_f.enemy):
-		var des := (owner_f.enemy.center() - position).normalized() * 430.0
-		vel = vel.rotated(clamp(vel.angle_to(des), -2.4 * dt, 2.4 * dt))
+	# leggera ricerca del bersaglio nei primi istanti: chi e' immerso nel lago
+	# o in copertura dietro una sequoia non attira la sfera... ma la sua
+	# immagine-esca si' (aim_point), e la sfera va a colpire quella
+	if t < 0.35:
+		var aim: Variant = owner_f.game.aim_point(owner_f, owner_f.enemy)
+		if aim != null:
+			var ap: Vector2 = aim
+			var des: Vector2 = (ap - position).normalized() * 430.0
+			vel = vel.rotated(clamp(vel.angle_to(des), -2.4 * dt, 2.4 * dt))
 	position += vel * dt
 	# la sfera attraversa la superficie dell'acqua e prosegue: lo schizzo
 	# tradisce la posizione di chi spara anche se e' nascosto sott'acqua
@@ -49,9 +56,11 @@ func tick(dt: float) -> void:
 		owner_f.game.spawn_fx_tex(texture, position,
 			{"life": 0.18, "scale": scale.x * 0.85, "add": true, "mod": modulate * Color(1, 1, 1, 0.4)})
 	# il limite inferiore segue il terreno: nel lago la sfera puo' scendere
-	# fino al fondale (e risalirne) invece di sparire a mezz'acqua
-	if t >= 2.2 or abs(position.x) > 1350.0 \
-			or position.y > owner_f.game.floor_at(position.x) + 90.0 or position.y < -650.0:
+	# fino al fondale (e risalirne); quello superiore segue il soffitto
+	# della mappa (nella foresta si combatte anche sopra le chiome)
+	if t >= 2.2 or abs(position.x) > owner_f.game.arena_x() + 200.0 \
+			or position.y > owner_f.game.floor_at(position.x) + 90.0 \
+			or position.y < owner_f.game.ceiling_y() - 230.0:
 		dead = true
 		return
 	var r := Rect2(position - Vector2(9, 9), Vector2(18, 18))

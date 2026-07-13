@@ -122,37 +122,62 @@ func _draw_menu() -> void:
 func _draw_mapsel() -> void:
 	draw_rect(Rect2(0, 0, 480, 270), Color(0.02, 0.03, 0.1, 0.45))
 	_text("SCEGLI LA MAPPA", Vector2(240, 48), 20, Color(1, 0.85, 0.2), "c")
-	var names := ["DESERTO ROCCIOSO", "LAGO DELLA COSTA"]
+	var names := ["DESERTO ROCCIOSO", "LAGO DELLA COSTA", "FORESTA DI SEQUOIE"]
 	var descs := [
 		"l'arena classica tra le mesas",
 		"un lago profondo: chi si immerge non puo' essere rilevato!",
+		"sequoie giganti: SPAZIO vicino a un tronco per nasconderti... finche' regge!",
 	]
-	for i in range(2):
-		var cx := 128.0 + i * 224.0
+	for i in range(3):
+		var cx := 84.0 + i * 156.0
 		var sel: bool = game.map_sel == i
-		var r := Rect2(cx - 78, 78, 156, 82)
+		var r := Rect2(cx - 66, 80, 132, 74)
 		# cornice (dorata se selezionata)
 		draw_rect(Rect2(r.position - Vector2(3, 3), r.size + Vector2(6, 6)),
 			Color(1, 0.82, 0.15) if sel else Color(0, 0, 0, 0.6))
 		if i == 0:
 			# anteprima deserto: cielo, mesas, sabbia
 			draw_rect(r, Color(0.42, 0.6, 0.83))
-			draw_rect(Rect2(r.position.x, r.position.y + 52, r.size.x, 30), Color(0.79, 0.6, 0.42))
-			draw_rect(Rect2(r.position.x + 20, r.position.y + 22, 28, 32), Color(0.66, 0.45, 0.3))
-			draw_rect(Rect2(r.position.x + 108, r.position.y + 30, 22, 24), Color(0.62, 0.42, 0.28))
-			draw_circle(r.position + Vector2(128, 14), 8, Color(0.99, 0.96, 0.84))
-		else:
+			draw_rect(Rect2(r.position.x, r.position.y + 48, r.size.x, 26), Color(0.79, 0.6, 0.42))
+			draw_rect(Rect2(r.position.x + 18, r.position.y + 20, 24, 28), Color(0.66, 0.45, 0.3))
+			draw_rect(Rect2(r.position.x + 92, r.position.y + 27, 19, 21), Color(0.62, 0.42, 0.28))
+			draw_circle(r.position + Vector2(108, 13), 7, Color(0.99, 0.96, 0.84))
+		elif i == 1:
 			# anteprima lago: cielo, sole, riva e specchio d'acqua profondo
 			draw_rect(r, Color(0.16, 0.3, 0.85))
-			draw_circle(r.position + Vector2(30, 15), 8, Color(0.99, 0.97, 0.86))
-			draw_rect(Rect2(r.position.x, r.position.y + 52, r.size.x, 30), Color(0.84, 0.77, 0.57))
-			draw_rect(Rect2(r.position.x + 39, r.position.y + 52, 78, 30), Color(0.13, 0.42, 0.72))
-			draw_rect(Rect2(r.position.x + 39, r.position.y + 52, 78, 3), Color(0.75, 0.92, 1.0))
+			draw_circle(r.position + Vector2(26, 13), 7, Color(0.99, 0.97, 0.86))
+			draw_rect(Rect2(r.position.x, r.position.y + 48, r.size.x, 26), Color(0.84, 0.77, 0.57))
+			draw_rect(Rect2(r.position.x + 33, r.position.y + 48, 66, 26), Color(0.13, 0.42, 0.72))
+			draw_rect(Rect2(r.position.x + 33, r.position.y + 48, 66, 3), Color(0.75, 0.92, 1.0))
+		else:
+			# anteprima foresta: spicchio di cielo sopra le chiome, foschia tra i
+			# fusti lontani, due sequoie in primo piano, sottobosco
+			draw_rect(r, Color(0.45, 0.66, 0.88))
+			draw_rect(Rect2(r.position.x, r.position.y + 22, r.size.x, 52), Color(0.58, 0.66, 0.63))
+			# guglie di conifera sul filo del cielo
+			for k in range(9):
+				var sx := 4.0 + k * 15.0
+				draw_colored_polygon(PackedVector2Array([
+					r.position + Vector2(sx - 7.0, 26.0),
+					r.position + Vector2(sx, 9.0),
+					r.position + Vector2(sx + 7.0, 26.0)]),
+					Color(0.16, 0.36, 0.25))
+			draw_rect(Rect2(r.position.x, r.position.y + 22, r.size.x, 8), Color(0.16, 0.36, 0.25))
+			# fusti lontani nella foschia + due sequoie vicine e rossicce
+			for k in range(5):
+				var fx := r.position.x + 9.0 + k * 28.0
+				draw_rect(Rect2(fx, r.position.y + 26, 7, 38), Color(0.42, 0.47, 0.45))
+			for k in range(2):
+				var tx := r.position.x + 30.0 + k * 58.0
+				draw_rect(Rect2(tx, r.position.y + 24, 14, 42), Color(0.55, 0.32, 0.2))
+				draw_rect(Rect2(tx, r.position.y + 24, 4, 42), Color(0.66, 0.42, 0.27))
+			draw_rect(Rect2(r.position.x, r.position.y + 62, r.size.x, 4), Color(0.3, 0.46, 0.24))
+			draw_rect(Rect2(r.position.x, r.position.y + 66, r.size.x, 8), Color(0.33, 0.23, 0.15))
 		if sel:
 			var wob := 3.0 * sin(game.phase_t * 7.0)
-			_text(">", Vector2(cx - 88 + wob, 124), 14, Color(1, 0.82, 0.15), "r")
-			_text("<", Vector2(cx + 88 - wob, 124), 14, Color(1, 0.82, 0.15), "l")
-		_text(names[i], Vector2(cx, 178), 10, Color(1, 0.82, 0.15) if sel else Color(1, 1, 1), "c")
+			_text(">", Vector2(cx - 74 + wob, 122), 13, Color(1, 0.82, 0.15), "r")
+			_text("<", Vector2(cx + 74 - wob, 122), 13, Color(1, 0.82, 0.15), "l")
+		_text(names[i], Vector2(cx, 172), 8, Color(1, 0.82, 0.15) if sel else Color(1, 1, 1), "c")
 	_text(descs[game.map_sel], Vector2(240, 204), 8, Color(1, 1, 1, 0.9), "c")
 	_text("A/D o frecce: scegli    INVIO o J: conferma    ESC: indietro", Vector2(240, 236), 8, Color(1, 1, 1, 0.7), "c")
 
@@ -181,6 +206,20 @@ func _draw() -> void:
 			var c2 := Color(1, 0.75, 0.1) if game.wins[1] > i else Color(0, 0, 0, 0.45)
 			draw_circle(Vector2(72 + i * 12, 48), 4, c1)
 			draw_circle(Vector2(480 - 72 - i * 12, 48), 4, c2)
+	# ping della partita online (verde/giallo/rosso a seconda della latenza)
+	if game.online and game.match_mgr != null and game.match_mgr.ping_ms > 0.0:
+		var ms := int(game.match_mgr.ping_ms)
+		var pcol := Color(0.4, 0.95, 0.45) if ms < 80 else \
+			(Color(1.0, 0.85, 0.25) if ms < 150 else Color(1.0, 0.4, 0.3))
+		_text("PING %d ms" % ms, Vector2(240, 40), 7, pcol, "c")
+	# suggerimento copertura nella foresta (per il lottatore locale)
+	if game.map == "forest" and game.phase == "fight":
+		var lf = game.local_fighter()
+		if lf.state == Fighter.St.HIDE:
+			_text("NASCOSTO  -  muoviti o SPAZIO per uscire", Vector2(240, 58), 8, Color(0.72, 1.0, 0.75), "c")
+		elif lf.state == Fighter.St.MOVE and game.tree_at(lf) != null:
+			# la zona di copertura corre lungo tutto il fusto: vale anche in volo
+			_text("SPAZIO: nasconditi dietro la sequoia", Vector2(240, 58), 8, Color(1, 1, 1, 0.85), "c")
 	# contatori combo
 	if p2.chain_n >= 2:
 		_text("COMBO x%d" % p2.chain_n, Vector2(70, 64), 12, Color(1, 0.6, 0.1), "l")

@@ -1,0 +1,23 @@
+[gd_scene load_steps=5 format=3]
+
+[ext_resource type="Script" path="res://scripts/AlberoInterattivo.gd" id="1_tree"]
+[ext_resource type="Texture2D" path="res://assets/bg/sequoia_trunk.png" id="2_trunk"]
+[ext_resource type="Texture2D" path="res://assets/bg/sequoia_canopy.png" id="3_canopy"]
+
+[sub_resource type="RectangleShape2D" id="RectangleShape2D_zone"]
+size = Vector2(120, 600)
+
+[node name="AlberoInterattivo" type="Area2D"]
+script = ExtResource("1_tree")
+
+[node name="Tronco" type="Sprite2D" parent="."]
+position = Vector2(0, -320)
+texture = ExtResource("2_trunk")
+
+[node name="Chioma" type="Sprite2D" parent="."]
+position = Vector2(0, -720)
+texture = ExtResource("3_canopy")
+
+[node name="ZonaCopertura" type="CollisionShape2D" parent="."]
+position = Vector2(0, -320)
+shape = SubResource("RectangleShape2D_zone")

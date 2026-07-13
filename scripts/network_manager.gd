@@ -114,14 +114,37 @@ const B_CHARGE := 1024
 const INPUT_REDUNDANCY := 8   # ogni pacchetto ripete gli ultimi N tick
 const MAX_SNAPSHOTS := 64     # ~1 s di storia a 60 Hz
 
+# Su varie reti webrtc-native non raggiunge MAI GATHERING_STATE_COMPLETE
+# (es. uno dei server STUN non risponde): senza un fallback l'host resterebbe
+# per sempre su "genero il codice offerta...". Il bundle viene quindi emesso
+# anche quando la raccolta si e' assestata (nessun candidato nuovo da
+# GATHER_GRACE secondi) o al piu' tardi dopo GATHER_TIMEOUT.
+const GATHER_GRACE := 1.5     # s senza candidati nuovi = raccolta considerata finita
+const GATHER_TIMEOUT := 6.0   # tetto massimo di attesa dall'SDP locale
+const CONNECT_TIMEOUT := 25.0 # dopo host_finish: se ICE non aggancia, e' fallita
+
+# Mappe giocabili online: la simulazione dev'essere deterministica su entrambe
+# le macchine (il netcode risimula il fighter remoto). Deserto e lago lo sono:
+# il lago aggiunge solo fisica dell'acqua e stealth, entrambi funzione della
+# sola posizione. La foresta NO (alberi abbattibili ed esche non stanno negli
+# snapshot del MatchManager), quindi resta fuori.
+const ONLINE_MAPS := ["desert", "lake"]
+
 var rtc: WebRTCMultiplayerPeer
 var pc: WebRTCPeerConnection
 var is_host := false
+# mappa della partita online: la sceglie l'HOST e viaggia dentro il
+# codice-offerta; l'ospite la legge applicando il payload (_apply_remote_payload)
+var map := "desert"
 
 var _local_sdp := {}          # {"type": ..., "sdp": ...} in attesa del bundle
 var _local_candidates: Array = []
 var _signaling_sent := false
 var _failed := false
+var _gather_t := 0.0          # tempo trascorso da quando esiste l'SDP locale
+var _last_cand_t := 0.0       # istante (su _gather_t) dell'ultimo candidato ICE
+var _connect_t := -1.0        # >=0: conto alla rovescia dell'handshake ICE (lato host)
+var _connected := false
 
 # buffer di input per il rollback: tick -> bitmask
 var local_inputs := {}
@@ -143,20 +166,36 @@ func _ready() -> void:
 	multiplayer.peer_disconnected.connect(_on_peer_disconnected)
 
 
-func _process(_dt: float) -> void:
+func _process(dt: float) -> void:
 	if pc == null:
 		return
 	# rtc (e quindi pc) viene gia' pollato ogni frame dal MultiplayerAPI;
 	# qui controlliamo solo l'avanzamento del signaling.
 	# Il bundle e' pronto quando abbiamo l'SDP locale e la raccolta dei
-	# candidati ICE e' terminata: lo emettiamo una volta sola.
-	if not _signaling_sent and not _local_sdp.is_empty() \
-			and pc.get_gathering_state() == WebRTCPeerConnection.GATHERING_STATE_COMPLETE:
-		_signaling_sent = true
-		signaling_ready.emit(get_local_payload())
+	# candidati ICE e' terminata: lo emettiamo una volta sola. COMPLETE e' la
+	# via maestra, ma se non arriva (vedi GATHER_GRACE) si emette lo stesso
+	# con i candidati raccolti fin qui: bastano per la quasi totalita' dei NAT.
+	if not _signaling_sent and not _local_sdp.is_empty():
+		_gather_t += dt
+		var done: bool = pc.get_gathering_state() == WebRTCPeerConnection.GATHERING_STATE_COMPLETE
+		if not done and not _local_candidates.is_empty() and _gather_t - _last_cand_t >= GATHER_GRACE:
+			done = true
+		if not done and _gather_t >= GATHER_TIMEOUT:
+			done = true  # anche senza candidati: meglio un errore chiaro che l'attesa infinita
+		if done:
+			_signaling_sent = true
+			signaling_ready.emit(get_local_payload())
 	if not _failed and pc.get_connection_state() == WebRTCPeerConnection.STATE_FAILED:
 		_failed = true
 		connection_failed.emit()
+	# dopo host_finish l'handshake ICE deve chiudersi in pochi secondi: se
+	# resta appeso in CONNECTING (NAT troppo restrittivo) segnaliamo il
+	# fallimento invece di lasciare l'host in attesa per sempre
+	if _connect_t >= 0.0 and not _connected and not _failed:
+		_connect_t += dt
+		if _connect_t >= CONNECT_TIMEOUT:
+			_failed = true
+			connection_failed.emit()
 
 
 # --- avvio della connessione (requisito 1) -----------------------------------
@@ -183,7 +222,10 @@ func guest_start(offer_json: String) -> Error:
 
 # Lato host, ultimo passo: applica l'answer dell'ospite.
 func host_finish(answer_json: String) -> Error:
-	return _apply_remote_payload(answer_json)
+	var err := _apply_remote_payload(answer_json)
+	if err == OK:
+		_connect_t = 0.0  # da qui l'handshake ICE ha CONNECT_TIMEOUT secondi
+	return err
 
 
 func close() -> void:
@@ -199,6 +241,10 @@ func close() -> void:
 	_local_candidates = []
 	_signaling_sent = false
 	_failed = false
+	_gather_t = 0.0
+	_last_cand_t = 0.0
+	_connect_t = -1.0
+	_connected = false
 	local_inputs.clear()
 	remote_inputs.clear()
 	snapshots.clear()
@@ -250,6 +296,7 @@ func _on_local_sdp(type: String, sdp: String) -> void:
 
 func _on_local_ice(media: String, index: int, name: String) -> void:
 	_local_candidates.append({"media": media, "index": index, "name": name})
+	_last_cand_t = _gather_t
 	local_ice_created.emit(media, index, name)
 
 
@@ -260,6 +307,7 @@ func get_local_payload() -> String:
 		"type": _local_sdp.get("type", ""),
 		"sdp": _local_sdp.get("sdp", ""),
 		"candidates": _local_candidates,
+		"map": map,   # scelta dell'host: l'ospite carica la stessa arena
 	})
 
 
@@ -270,6 +318,11 @@ func _apply_remote_payload(payload_json: String) -> Error:
 	if not (data is Dictionary) or not data.has("sdp") or String(data.get("sdp", "")).is_empty():
 		push_error("Payload di signaling non valido")
 		return ERR_INVALID_DATA
+	# solo l'ospite eredita la mappa: e' l'host a sceglierla (nella sua risposta
+	# l'ospite la rimanda indietro, ma l'host ignora il campo)
+	if not is_host:
+		var m := String(data.get("map", "desert"))
+		map = m if m in ONLINE_MAPS else "desert"
 	var err := pc.set_remote_description(String(data.get("type", "offer")), String(data["sdp"]))
 	if err != OK:
 		return err
@@ -279,6 +332,7 @@ func _apply_remote_payload(payload_json: String) -> Error:
 
 
 func _on_peer_connected(id: int) -> void:
+	_connected = true
 	print("[net] peer connesso: %d (io sono il player %d)" % [id, local_player()])
 	match_connected.emit(id)
 

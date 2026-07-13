@@ -57,6 +57,7 @@ func _draw() -> void:
 			var c := Color(0.12, 0.37, 0.58).lerp(Color(0.02, 0.11, 0.22), float(i) / bands)
 			draw_rect(Rect2(wx0, yy, X_RIGHT - wx0, deep_h / bands + 1.0), c)
 		_draw_coast(by)
+		_draw_bottom(by)
 	else:
 		var x0: float = game.LAKE_X0
 		# velo d'acqua sopra lottatori e fondale
@@ -78,6 +79,48 @@ func _draw() -> void:
 			var gy: float = wy + 14.0 + fmod(i * 83.3 + t * 16.0, by - wy - 20.0)
 			if gy < game.floor_at(gx):
 				draw_rect(Rect2(gx, gy, 2, 2), Color(0.8, 0.95, 1.0, 0.16 + 0.14 * sin(t * 6.0 + i)))
+
+
+# Arredo del fondale (sassi, alghe che ondeggiano, sabbia increspata) posato
+# su gradoni e fondo piatto: ora che la camera segue i lottatori in
+# profondita', il fondo del lago deve leggersi chiaramente come "pavimento".
+# Posizioni deterministiche (MAI randf qui: il disegno non influenza il
+# gameplay ma deve restare identico frame dopo frame).
+func _draw_bottom(by: float) -> void:
+	var x0: float = game.LAKE_X0
+	var fl: float = game.FLOOR_Y
+	# sassi sparsi, piu' freddi e scuri man mano che si scende
+	for i in range(16):
+		var gx: float = x0 + 30.0 + fmod(i * 197.3 + 61.0, X_RIGHT - x0 - 60.0)
+		var gy: float = game.floor_at(gx)
+		if gy <= fl + 4.0:
+			continue  # solo sott'acqua
+		var depth: float = clampf((gy - fl) / (by - fl), 0.0, 1.0)
+		var rs: float = 5.0 + fmod(i * 37.7, 9.0)
+		var rc := Color(0.52, 0.47, 0.40).lerp(Color(0.16, 0.22, 0.30), depth)
+		draw_circle(Vector2(gx, gy - rs * 0.35), rs, rc)
+		draw_circle(Vector2(gx - rs * 0.3, gy - rs * 0.55), rs * 0.55, rc.lightened(0.12))
+	# alghe: nastri ancorati al fondo che ondeggiano con la corrente
+	for i in range(9):
+		var ax: float = x0 + 70.0 + fmod(i * 271.9 + 23.0, X_RIGHT - x0 - 120.0)
+		var ay: float = game.floor_at(ax)
+		if ay <= fl + 4.0:
+			continue
+		var depth: float = clampf((ay - fl) / (by - fl), 0.0, 1.0)
+		var h: float = 26.0 + fmod(i * 53.1, 26.0)
+		var col := Color(0.16, 0.55, 0.34).lerp(Color(0.05, 0.25, 0.20), depth)
+		var pts := PackedVector2Array()
+		for k in range(6):
+			var sway: float = sin(t * 1.6 + i * 1.7 + k * 0.7) * (1.0 + 2.2 * k / 5.0)
+			pts.append(Vector2(ax + sway, ay - h * k / 5.0))
+		draw_polyline(pts, col, 2.2)
+	# increspature di sabbia sul fondo piatto piu' profondo
+	var deep_x0: float = x0 + game.STEP_W * 3.0
+	for i in range(10):
+		var sx: float = deep_x0 + 40.0 + i * (X_RIGHT - deep_x0 - 80.0) / 9.0
+		var sw2: float = 14.0 + fmod(i * 31.7, 12.0)
+		draw_line(Vector2(sx - sw2, by - 2.0), Vector2(sx + sw2, by - 2.0),
+			Color(0.30, 0.36, 0.44, 0.7), 1.5)
 
 
 func _draw_coast(by: float) -> void:

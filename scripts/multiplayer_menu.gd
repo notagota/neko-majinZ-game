@@ -21,9 +21,16 @@ extends Control
 
 const ARENA_SCENE := "res://scenes/main.tscn"
 
+# nomi mostrati per le mappe giocabili online (NetworkManager.ONLINE_MAPS):
+# corti sul pulsante (la riga e' larga solo 480 px), estesi nei messaggi
+const MAP_SHORT := {"desert": "DESERTO", "lake": "LAGO"}
+const MAP_NAMES := {"desert": "DESERTO ROCCIOSO", "lake": "LAGO DELLA COSTA"}
+
 var role := ""              # "", "host" oppure "join"
 var status: Label
 var mode_row: HBoxContainer
+var map_btn: Button         # host: cambia la mappa della partita
+var map_lbl: Label          # ospite: mostra la mappa scelta dall'host
 var panel_host: VBoxContainer
 var panel_join: VBoxContainer
 var offer_out: TextEdit     # host: offerta generata da inviare
@@ -56,7 +63,16 @@ func _ready() -> void:
 	mode_row.size = Vector2(480, 22)
 	mode_row.add_child(_mk_btn("OSPITA (HOST)", _on_host_pressed))
 	mode_row.add_child(_mk_btn("PARTECIPA (JOIN)", _on_join_pressed))
+	# la mappa la sceglie l'host: viaggia dentro il codice-offerta, quindi
+	# cambiandola il codice va rigenerato (lo facciamo qui automaticamente)
+	map_btn = _mk_btn("", _on_map_pressed)
+	map_btn.visible = false
+	mode_row.add_child(map_btn)
+	map_lbl = _mk_label("", 8, Color(0.7, 0.95, 1.0))
+	map_lbl.visible = false
+	mode_row.add_child(map_lbl)
 	add_child(mode_row)
+	_refresh_map_ui()
 	panel_host = _build_host_panel()
 	panel_join = _build_join_panel()
 	status = _mk_label("scegli se ospitare o partecipare  -  ESC: torna al menu", 8, Color(0.8, 0.9, 1.0))
@@ -77,6 +93,12 @@ func _ready() -> void:
 		elif a.begins_with("--netjoin="):
 			auto_dir = a.substr(10)
 			auto_role = "join"
+		elif a.begins_with("--netmap="):
+			# test automatico: mappa scelta dall'host (--netmap=lake)
+			var m := a.substr(9)
+			if m in NetworkManager.ONLINE_MAPS:
+				NetworkManager.map = m
+	_refresh_map_ui()
 	if auto_role == "host":
 		_on_host_pressed()
 	elif auto_role == "join":
@@ -122,6 +144,7 @@ func _on_host_pressed() -> void:
 	panel_join.visible = false
 	offer_out.text = ""
 	answer_in.text = ""
+	_refresh_map_ui()
 	var err := NetworkManager.host_start()
 	if err != OK:
 		_set_status("ERRORE %d: WebRTC non disponibile: la DLL webrtc_native deve stare accanto all'exe (riestrai TUTTO lo zip)" % err)
@@ -136,7 +159,33 @@ func _on_join_pressed() -> void:
 	panel_host.visible = false
 	offer_in.text = ""
 	answer_out.text = ""
+	_refresh_map_ui()
 	_set_status("incolla il codice dell'host e premi GENERA RISPOSTA")
+
+
+# L'host cicla tra le mappe giocabili online: la scelta finisce nel
+# codice-offerta, quindi il codice va RIGENERATO (host_start da capo).
+func _on_map_pressed() -> void:
+	var maps: Array = NetworkManager.ONLINE_MAPS
+	var i: int = maxi(0, maps.find(NetworkManager.map))
+	NetworkManager.map = maps[(i + 1) % maps.size()]
+	if role == "host":
+		_on_host_pressed()  # nuovo codice-offerta con la mappa aggiornata
+		_set_status("mappa: %s - rigenero il codice offerta..." % _map_name())
+	else:
+		_refresh_map_ui()
+
+
+func _map_name() -> String:
+	return MAP_NAMES.get(NetworkManager.map, NetworkManager.map)
+
+
+# host: pulsante per cambiare mappa; ospite: etichetta con la mappa ricevuta
+func _refresh_map_ui() -> void:
+	map_btn.visible = role != "join"
+	map_btn.text = "MAPPA: %s" % MAP_SHORT.get(NetworkManager.map, NetworkManager.map)
+	map_lbl.visible = role == "join"
+	map_lbl.text = "  mappa dell'host: %s" % _map_name()
 
 
 func _make_answer() -> void:
@@ -151,7 +200,9 @@ func _make_answer() -> void:
 		else:
 			_set_status("ERRORE %d: WebRTC non disponibile: la DLL webrtc_native deve stare accanto all'exe (riestrai TUTTO lo zip)" % err)
 		return
-	_set_status("genero la risposta...")
+	# il codice dell'host portava con se' la mappa: mostrala all'ospite
+	_refresh_map_ui()
+	_set_status("mappa: %s - genero la risposta..." % _map_name())
 
 
 func _connect_answer() -> void:
@@ -208,7 +259,7 @@ func _on_connected(_id: int) -> void:
 
 
 func _on_failed() -> void:
-	_set_status("CONNESSIONE FALLITA: ricontrolla i codici o la rete")
+	_set_status("CONNESSIONE FALLITA: rigenera i codici e riprova (reti molto chiuse richiedono un relay TURN)")
 
 
 # --- helper --------------------------------------------------------------------

@@ -5,7 +5,7 @@ extends Node2D
 # Le pose native guardano a DESTRA: flip_h quando facing == -1 (sinistra).
 # Fanno eccezione i pugni, che hanno un frame dedicato per direzione.
 
-enum St { INTRO, MOVE, ATTACK, BLAST, BEAM_CHARGE, BEAM_FIRE, DASH, ROLL, GUARD, CHARGE, HURT, LAUNCHED, DOWN, KO, WIN, LAND, ESCAPE }
+enum St { INTRO, MOVE, ATTACK, BLAST, BEAM_CHARGE, BEAM_FIRE, DASH, ROLL, GUARD, CHARGE, HURT, LAUNCHED, DOWN, KO, WIN, LAND, ESCAPE, HIDE }
 
 const FLOOR_Y := 400.0
 # fuga dalla combo: subiti ESCAPE_HITS colpi di fila, tenere premuto l'attacco
@@ -15,6 +15,10 @@ const ESCAPE_T := 0.38
 const ESCAPE_INVULN := 1.5
 const ARENA_X := 1150.0
 const CEIL_Y := -420.0
+# immagine-esca: quante pose fa si trovava il lottatore quando si e' nascosto
+# (a 60 Hz, 24 campioni = 0.4 s prima: l'esca resta dove l'avversario ti ha
+# visto per l'ultima volta, non incollata al tronco)
+const DECOY_LAG := 24
 const SEP_X := 760.0
 const SEP_Y := 400.0
 const SPEED := 225.0
@@ -82,6 +86,9 @@ var sfx_t := 0.0
 var ko_rest := false
 var in_water := false
 var bubble_t := 0.0
+var hide_tree: Node = null  # sequoia dietro cui si e' in copertura (St.HIDE)
+var guard_prev := false     # per il fronte di salita di SPAZIO (nascondersi)
+var pose_hist: Array = []   # ultime pose (per l'immagine-esca: vedi _enter_hide)
 var spr: AnimatedSprite2D
 var aura: Sprite2D
 var cur_anim := ""
@@ -93,6 +100,9 @@ func setup(g: Node2D, pal: String, disp_name: String, ctrl) -> void:
 	palette = pal
 	fighter_name = disp_name
 	controller = ctrl
+	# i lottatori bersagliabili stanno nel gruppo "targetable": chi si
+	# nasconde dietro una sequoia ne esce e sparisce da homing e sensori
+	add_to_group("targetable")
 	aura = Sprite2D.new()
 	aura.texture = load("res://assets/sprites/fx/aura.png")
 	aura.position = Vector2(0, -28)
@@ -140,6 +150,12 @@ func reset(pos: Vector2, face: int) -> void:
 	ko_rest = false
 	in_water = false
 	bubble_t = 0.0
+	hide_tree = null
+	guard_prev = false
+	pose_hist = []
+	z_index = 0
+	if not is_in_group("targetable"):
+		add_to_group("targetable")
 	spr.modulate = Color(1, 1, 1, 1)
 	aura.visible = false
 	cur_anim = ""
@@ -170,8 +186,9 @@ func _pivot_feet() -> void:
 
 
 func _face_enemy() -> void:
-	# non ci si puo' orientare verso un nemico immerso e non rilevabile
-	if enemy != null and game.can_see(self, enemy) and abs(enemy.position.x - position.x) > 4.0:
+	# non ci si puo' orientare verso un nemico non rilevabile (immerso nel
+	# lago o in copertura dietro una sequoia, cioe' fuori da "targetable")
+	if enemy != null and game.can_target(self, enemy) and abs(enemy.position.x - position.x) > 4.0:
 		facing = 1 if enemy.position.x > position.x else -1
 
 
@@ -229,11 +246,16 @@ func tick(dt: float) -> void:
 		St.KO: _tick_launched(dt, inp, true)
 		St.DOWN: _tick_down(dt)
 		St.ESCAPE: _tick_escape(dt)
+		St.HIDE: _tick_hide(dt, inp)
 		_: pass
+	guard_prev = inp.guard
 
-	# limiti arena (sul lago il fondale scende sotto la riva)
-	position.x = clamp(position.x, -ARENA_X, ARENA_X)
-	position.y = clamp(position.y, CEIL_Y, _floor())
+	# limiti arena (variano per mappa: sul lago il fondale scende sotto la riva,
+	# nella foresta il soffitto sale sopra le chiome e l'arena e' piu' larga)
+	var ax: float = game.arena_x()
+	position.x = clamp(position.x, -ax, ax)
+	var cy: float = game.ceiling_y()
+	position.y = clamp(position.y, cy, _floor())
 	# distanza massima tra i lottatori (stile SSW2)
 	if enemy != null and state in [St.MOVE, St.GUARD, St.CHARGE, St.ATTACK]:
 		position.x = clamp(position.x, enemy.position.x - SEP_X, enemy.position.x + SEP_X)
@@ -265,16 +287,33 @@ func tick(dt: float) -> void:
 				game.spawn_bubble(center() + Vector2(randf_range(-8.0, 8.0), randf_range(-14.0, 4.0)))
 
 	_update_visual()
+	_record_pose()
 	queue_redraw()
+
+
+# Ricorda le ultime pose (posizione + fotogramma): nascondendosi si lascia
+# indietro un'immagine residua presa da qui (vedi _enter_hide / decoy.gd).
+func _record_pose() -> void:
+	pose_hist.append({"pos": position, "facing": facing,
+		"anim": cur_anim, "frame": spr.frame})
+	if pose_hist.size() > DECOY_LAG:
+		pose_hist.pop_front()
 
 
 # --- stati --------------------------------------------------------------
 
 func _tick_move(dt: float, inp: Dictionary) -> void:
 	_face_enemy()
+	# fronte di salita di SPAZIO: dentro la zona di una sequoia (e a terra)
+	# la pressione "fresca" mette in copertura invece di parare
+	var guard_edge: bool = inp.guard and not guard_prev
 	var mv: Vector2 = inp.move
 	if mv.length() > 1.0:
 		mv = mv.normalized()
+	# nemico non rilevabile (immerso o in copertura): non potendo puntarlo, ci
+	# si volta dalla parte in cui si cammina — cosi' i colpi vanno dove si guarda
+	if enemy != null and not game.can_target(self, enemy) and absf(mv.x) > 0.3:
+		facing = 1 if mv.x > 0.0 else -1
 	# in acqua ci si muove piu' lenti e da fermi si tende a galleggiare su
 	vel = mv * SPEED * (0.55 if in_water else 1.0)
 	if in_water and mv == Vector2.ZERO:
@@ -300,9 +339,13 @@ func _tick_move(dt: float, inp: Dictionary) -> void:
 		st = 0.0
 		stage_hit = false
 		after_t = 0.0
-		# lo scatto punta il bersaglio solo se lo si puo' rilevare
-		if game.can_see(self, enemy):
-			dash_dir = (enemy.center() - center()).normalized()
+		# lo scatto punta il bersaglio solo se lo si puo' rilevare; se il
+		# nemico e' in copertura ma ha lasciato un'esca, si abbocca e si
+		# scatta contro l'immagine residua
+		var aim: Variant = game.aim_point(self, enemy)
+		if aim != null:
+			var ap: Vector2 = aim
+			dash_dir = (ap - center()).normalized()
 		else:
 			dash_dir = Vector2(facing, 0.0)
 		_face_enemy()
@@ -318,6 +361,10 @@ func _tick_move(dt: float, inp: Dictionary) -> void:
 		else:
 			vel = Vector2(facing * 310.0, 150.0)
 		game.sfx.play("dash", 1.3)
+	elif guard_edge and game.tree_at(self) != null:
+		# ci si nasconde a QUALSIASI quota: la zona di copertura corre lungo
+		# tutto il fusto, quindi anche in volo, aggrappati a mezza sequoia
+		_enter_hide(game.tree_at(self))
 	elif inp.guard:
 		state = St.GUARD
 		st = 0.0
@@ -540,9 +587,71 @@ func _tick_escape(_dt: float) -> void:
 		state = St.MOVE
 
 
+# --- copertura dietro le sequoie (mappa "forest") -------------------------
+
+# entra in copertura: si scivola DIETRO al fusto (z sotto quello dell'albero,
+# che in cambio diventa semitrasparente per non perdersi di vista) e si esce
+# dal gruppo "targetable", sparendo da scatto homing, sfere e sensori dell'IA
+func _enter_hide(tree: Node) -> void:
+	# INGANNO: prima di sparire si lascia indietro un'immagine residua di
+	# com'eri DECOY_LAG frame fa (dove l'avversario ti ha visto per l'ultima
+	# volta). L'IA e i proiettili a ricerca la scambiano per te finche' non
+	# svanisce o non la colpiscono, scoprendo il trucco.
+	if not pose_hist.is_empty():
+		game.spawn_decoy(self, pose_hist[0])
+	state = St.HIDE
+	st = 0.0
+	vel = Vector2.ZERO
+	hide_tree = tree
+	z_index = game.Z_HIDDEN
+	position.x = tree.global_position.x  # ci si allinea al centro del tronco
+	remove_from_group("targetable")
+	game.sfx.play("select", 0.7, -8.0)
+	print("[tree] %s si nasconde dietro l'albero (x=%d, y=%d)"
+		% [fighter_name, int(tree.global_position.x), int(position.y)])
+
+
+# in copertura si resta fermi: ci si scopre muovendosi, ripremendo SPAZIO
+# o provando una qualsiasi azione (il breve st>0.15 evita che la stessa
+# pressione d'ingresso conti anche come uscita)
+func _tick_hide(_dt: float, inp: Dictionary) -> void:
+	vel = Vector2.ZERO
+	if hide_tree == null or not is_instance_valid(hide_tree) or hide_tree.destroyed:
+		force_unhide()
+		return
+	var guard_edge: bool = inp.guard and not guard_prev
+	if st > 0.15 and (guard_edge or inp.move.length() > 0.25 \
+			or inp.attack or inp.blast or inp.beam or inp.dash or inp.roll):
+		_exit_hide()
+
+
+# uscita volontaria dalla copertura
+func _exit_hide() -> void:
+	hide_tree = null
+	z_index = 0
+	if not is_in_group("targetable"):
+		add_to_group("targetable")
+	if state == St.HIDE:
+		state = St.MOVE
+		st = 0.0
+
+
+# uscita FORZATA (albero distrutto o colpo subito): si torna subito
+# visibili, bersagliabili e vulnerabili, senza alcuna invulnerabilita'
+func force_unhide() -> void:
+	if hide_tree == null and state != St.HIDE:
+		return
+	print("[tree] %s scoperto!" % fighter_name)
+	invuln = 0.0
+	_exit_hide()
+	game.spawn_fx("alert", position + Vector2(0, -74), {"life": 0.4, "scale": 0.5})
+
+
 # --- subire colpi -------------------------------------------------------
 
 func take_hit(dmg: float, opts: Dictionary) -> void:
+	if hide_tree != null or state == St.HIDE:
+		force_unhide()  # un colpo vagante scova chi e' in copertura
 	hp = max(0.0, hp - dmg)
 	lag_delay = 0.55
 	ki = min(ki_max, ki + 5.0)
@@ -572,6 +681,8 @@ func take_block(chip: float, push: Vector2) -> void:
 
 
 func set_ko(launch: Vector2) -> void:
+	if hide_tree != null or state == St.HIDE:
+		force_unhide()
 	state = St.KO
 	st = 0.0
 	vel = launch
@@ -603,6 +714,10 @@ func _update_visual() -> void:
 	var vis_a := 1.0
 	if state == St.DOWN or (invuln > 0.0 and state == St.MOVE):
 		vis_a = 0.55 + 0.3 * sin(st * 40.0)
+	# in copertura si e' DIETRO al fusto (z_index): basta una velatura leggera,
+	# la trasparenza del tronco fa il resto
+	if state == St.HIDE:
+		vis_a = 0.9
 	# sott'acqua lo sprite prende una velatura azzurra
 	if in_water:
 		spr.modulate = Color(0.62, 0.80, 1.0, vis_a * 0.92)
@@ -644,6 +759,8 @@ func _update_visual() -> void:
 			play_anim("fall")
 		St.ESCAPE:
 			play_anim("windup")
+		St.HIDE:
+			play_anim("idle")
 		St.WIN, St.INTRO:
 			play_anim("taunt")
 	# arte nativa verso destra: si specchia guardando a sinistra, tranne i

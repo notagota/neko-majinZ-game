@@ -30,6 +30,22 @@ Scelta la modalità, una seconda schermata permette di **scegliere la mappa**:
   sollevando uno schizzo: anche chi è nascosto sott'acqua **si tradisce sparando**.
   I gradoni della costa sono rivestiti con la texture della spiaggia, sfumata da un
   gradino all'altro.
+- **FORESTA DI SEQUOIE** — la mappa **più larga** (arena ±1800 invece di ±1150): un bosco
+  vero, con **dieci sequoie giganti interattive**, e il **soffitto di volo molto più alto**
+  delle altre mappe: salendo si bucano le chiome e si duella **sopra la foresta**, tra cielo,
+  nuvole e una cresta di conifere all'orizzonte. Accanto a un tronco — **a qualsiasi quota**,
+  anche in volo a mezz'altezza dell'albero — **SPAZIO ti nasconde dietro l'albero**: passi
+  dietro al fusto (che si vela per non perderti di vista) ed **esci dal radar** — scatto
+  homing e sfere a ricerca non ti puntano più e la CPU perde il bersaglio.
+  **INGANNO**: sparendo lasci indietro un'**immagine-esca** di com'eri un attimo prima, cioè
+  dove l'avversario ti ha visto per l'ultima volta. L'esca **inganna davvero**: la CPU le vola
+  incontro e la prende a pugni, e anche scatto homing e sfere di ki puntano lei al posto tuo.
+  Chi la colpisce la fa svanire in uno sbuffo (e capisce di essere stato beffato), poi si
+  insospettisce e va a **prendere a legnate il tronco** dove sei sparito.
+  Le sequoie **si possono abbattere**, ma sono **molto robuste** (500 PV: servono una
+  quindicina di combo piene o una decina di raggi) — quando il fusto cede, si spezza e cade, e
+  chi ci si nascondeva dietro viene **scoperto all'istante**. Basta muoversi, attaccare o
+  ripremere SPAZIO per uscire; gli alberi abbattuti **ricrescono a ogni round**.
 
 Nel menù (titolo con logo in stile Dragon Ball): W/S per scegliere, INVIO o J per
 confermare, ESC per tornare indietro; l'ultima voce regola il **volume** (A/D, INVIO = muto).
@@ -62,7 +78,7 @@ oppure aprire la cartella come progetto nell'editor Godot e premere F5.
 | **L** | Raggio energetico (costa 200 ki = 2 tacche, danno enorme): animazione di carica in 8 pose, poi il raggio si estende e colpisce con la punta, con pioggia di scintille sull'impatto |
 | **I** | Scatto homing verso l'avversario (costa 25 ki, colpisce al contatto) |
 | **U** | Attacco palla rotolante (gratis, con ricarica) |
-| **SPAZIO** | Parata (riduce il danno all'80%) |
+| **SPAZIO** | Parata (riduce il danno all'80%) — **nella foresta**, accanto a una sequoia (a terra **o in volo**, lungo tutto il fusto): ti **nascondi dietro il tronco** lasciando un'**immagine-esca** al posto tuo (ripremi o muoviti per uscire) |
 | **H** (tieni premuto) | Carica ki con aura |
 | **R** | Riavvia il match — **1** pausa — **INVIO** rivincita a fine match |
 | **ESC** | Torna al menù — **2/3** volume giù/su (muto a zero) |
@@ -80,7 +96,13 @@ Back/Select = menù.
   si espandono a coprire l'intera scena (1440×810) **solo sui colpi pesanti**: combo che
   lancia, impatto del raggio, KO e fuga dalla combo.
 - **Musiche chiptune di battaglia**, una per mappa: incalzante in La minore (160 BPM) nel
-  deserto, arpeggi con eco in Re minore (140 BPM) sul lago; in loop per tutto il match.
+  deserto, arpeggi con eco in Re minore (140 BPM) sul lago, riff che si arrampicano in Mi
+  minore (150 BPM) nella foresta; in loop per tutto il match.
+- **Stealth per mappa**: sott'acqua nel lago, dietro le sequoie nella foresta. In entrambi
+  i casi chi è coperto esce dal gruppo `targetable`, cioè sparisce da homing, sfere a
+  ricerca e "sensori" della CPU (che passa a cercarti sull'ultima posizione nota).
+  Nella foresta si aggiunge l'**immagine-esca** (`decoy.gd`): un falso bersaglio che dura
+  ~2,6 s e che l'avversario (CPU, scatto homing e sfere di ki) insegue e attacca al posto tuo.
 - La camera inquadra entrambi i lottatori e zooma in/out dinamicamente (stile SSW2).
 - La CPU vola, para, schiva i raggi, carica il ki, fa combo, scatti e sfere.
 
@@ -90,7 +112,11 @@ Connessione **diretta tra i due giocatori** (WebRTC + `WebRTCMultiplayerPeer`), 
 server dedicati: serve solo scambiarsi due codici testuali (per chat/Discord/email).
 
 1. Un giocatore sceglie **OSPITA (HOST)**: il gioco genera un **codice offerta** — COPIA
-   e invialo all'avversario.
+   e invialo all'avversario. Col pulsante **MAPPA** l'host sceglie l'arena della partita
+   (**DESERTO ROCCIOSO** o **LAGO DELLA COSTA**): la scelta viaggia dentro il codice-offerta,
+   quindi l'ospite carica la stessa mappa senza doversi accordare (cambiando mappa il codice
+   viene rigenerato: invia sempre l'ultimo). La foresta resta fuori dall'online: alberi
+   abbattibili ed esche non sono nello snapshot del netcode e potrebbero desincronizzarsi.
 2. L'altro sceglie **PARTECIPA (JOIN)**, incolla il codice, preme **GENERA RISPOSTA** e
    rimanda il **codice risposta** all'host.
 3. L'host incolla la risposta e preme **CONNETTI**: appena il collegamento si apre
@@ -100,11 +126,18 @@ Note tecniche: l'host comanda P1 e l'ospite P2 (`set_multiplayer_authority`); og
 l'input locale viene compresso in una bitmask e scambiato con RPC *unreliable*
 (`match_manager.gd` → `fighter.execute_inputs()`); niente pausa/riavvio in online.
 Il netcode è **predittivo**: gli input sono bufferizzati per numero di frame, ogni
-pacchetto ripete gli ultimi 5 frame (ridondanza contro il packet loss), se l'input
+pacchetto ripete gli ultimi 10 frame (ridondanza contro il packet loss), se l'input
 dell'avversario non è ancora arrivato si assume che ripeta l'ultimo ricevuto e, quando
 un pacchetto smentisce una predizione, il personaggio remoto viene riportato allo
 snapshot del frame sbagliato e risimulato fino al presente (riconciliazione silenziosa:
-niente danni/effetti/suoni doppi). Il gioco non si blocca mai in attesa della rete. Richiede l'estensione `addons/webrtc_native` (inclusa, build
+niente danni/effetti/suoni doppi). Il gioco non si blocca mai in attesa della rete.
+All'avvio della partita i due giochi fanno un **handshake di sincronizzazione**: i
+contatori di frame partono allineati (l'ospite compensa il mezzo viaggio del messaggio
+di start), così lo scarto tra i clock non diventa lag artificiale; il **ping** è
+misurato di continuo e mostrato sotto il timer. Se la raccolta dei candidati ICE non
+si conclude (succede su alcune reti), il codice-offerta viene emesso comunque dopo
+pochi secondi con i candidati raccolti fin lì, e l'handshake dell'host ha un timeout
+chiaro invece dell'attesa infinita. Richiede l'estensione `addons/webrtc_native` (inclusa, build
 Windows x86_64; per altre piattaforme scaricare le librerie dalla release GitHub di
 `godotengine/webrtc-native`). Il traffico passa in P2P; i server STUN pubblici di Google
 (più istanze, per ridondanza) servono solo a scoprire il proprio indirizzo. In LAN funziona
@@ -121,14 +154,21 @@ godot --path . -- --beamtest             # P1 spara il raggio subito
 godot --path . -- --training             # entra direttamente in allenamento
 godot --path . -- --lake                 # combattimento sulla mappa del lago
 godot --path . -- --divetest             # (col lago) P1 parte immerso: test stealth
+godot --path . -- --forest               # combattimento nella foresta di sequoie
+godot --path . -- --treetest             # (foresta) P1 si nasconde in volo, l'albero cade, P1 e' scoperto
+godot --path . -- --decoytest            # (foresta) P1 lascia l'esca: la CPU ci casca e la attacca
+godot --path . -- --skytest              # (foresta) i due partono sopra le chiome
+godot --path . -- --widetest             # (foresta) lottatori lontanissimi: zoom-out estremo
 godot --path . -- --mapsel               # apre direttamente la scelta mappa
 godot --path . -- --shot=out.png --shotdelay=3.5   # screenshot automatico e chiudi
 godot --path . -- --nethost=C:/tmp/net           # test online: host automatico via file
 godot --path . -- --netjoin=C:/tmp/net           # test online: ospite automatico via file
+godot --path . -- --nethost=C:/tmp/net --netmap=lake   # ...online sulla mappa del lago
 ```
 
 (`--nethost`/`--netjoin` scambiano offerta e risposta tramite `offer.json`/`answer.json`
-nella cartella indicata: lanciando due istanze sulla stessa cartella si connettono da sole.
+nella cartella indicata: lanciando due istanze sulla stessa cartella si connettono da sole;
+`--netmap=desert|lake` sceglie la mappa lato host, che l'ospite eredita dal codice-offerta.
 Aggiungendo `--netprobe` i giocatori generano input sintetici che cambiano di continuo:
 serve a collaudare predizione e riconciliazioni, contate nei log ogni 5 secondi.)
 
@@ -145,7 +185,13 @@ serve a collaudare predizione e riconciliazioni, contate nei log ogni 5 secondi.
 - `addons/webrtc_native/` — estensione GDExtension WebRTC (librerie Windows x86_64)
 - `scripts/ki_blast.gd`, `energy_beam.gd`, `one_shot_fx.gd`, `hud.gd`, `sfx_bank.gd`
 - `scripts/water_zone.gd` — il lago: fossa scura dietro ai lottatori e velo d'acqua
-  animato davanti (superficie ondulata, luccichii)
+  animato davanti (superficie ondulata, luccichii, arredo del fondale)
+- `scripts/AlberoInterattivo.gd` + `scenes/albero_interattivo.tscn` — la sequoia della
+  foresta: zona di copertura (Area2D lungo tutto il fusto), PV del tronco, caduta e scoperta
+  di chi si nasconde; gli sfondi della foresta usano nodi `Parallax2D` a più profondità
+  (`game._build_forest_layers`)
+- `scripts/decoy.gd` — l'immagine-esca lasciata da chi si nasconde: falso bersaglio per
+  CPU, scatto homing e sfere di ki (`game.aim_point` / `game.decoy_of`), si dissolve se colpita
 - `assets/sprites/z1|z2` — frame del personaggio, rivolti nativamente a destra
   (z2 = palette swap gialla per la CPU, rigenerata da z1 con `tools/PaletteSwapDir.cs`);
   i pugni hanno un frame per direzione: `punch_01` verso destra, `punch_02` verso sinistra
@@ -153,9 +199,11 @@ serve a collaudare predizione e riconciliazioni, contate nei log ogni 5 secondi.
   il raggio è composto da `beam_head` (sfera alle mani), `beam_body1` (tratto tegolabile),
   `beam_body2` (tratto fiammeggiante) e `beam_tail` (punta, dove sta la collisione)
 - `assets/music/menu.wav` — canzone del menù (loop sull'intera durata del brano);
-  `battle_desert.wav` / `battle_lake.wav` — musiche chiptune di battaglia (da `tools/BattleGen.cs`)
+  `battle_desert.wav` / `battle_lake.wav` / `battle_forest.wav` — musiche chiptune di
+  battaglia (da `tools/BattleGen.cs` e `tools/ForestGen.cs`)
 - `tools/*.cs` — script C# (PowerShell `Add-Type`) della pipeline degli asset:
   `SpriteDetect` (bounding box), `Extract` (ritaglio + palette swap da Z.png),
   `PaletteSwapDir` (rigenera z2 da z1), `BgGen` (sfondi deserto), `LakeGen` (sfondo e
-  riva del lago da sshaohmarubg.gif + splash.wav), `SfxGen` (WAV sintetizzati),
-  `MusicGen` (musichetta chiptune originale del menù), `BattleGen` (musiche di battaglia)
+  riva del lago da sshaohmarubg.gif + splash.wav), `ForestGen` (sfondi, sequoie e musica
+  della foresta), `SfxGen` (WAV sintetizzati), `MusicGen` (musichetta chiptune originale
+  del menù), `BattleGen` (musiche di battaglia)

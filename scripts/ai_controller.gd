@@ -14,6 +14,7 @@ var reacted := false
 var last_seen := Vector2.ZERO
 var lost := false
 var esc_roll := -1.0
+var smash_tree: Node = null   # sequoia sospetta da abbattere (piano "smash")
 
 
 func poll(f, dt: float) -> Dictionary:
@@ -46,15 +47,27 @@ func poll(f, dt: float) -> Dictionary:
 			kept.append(a)
 	seq = kept
 
-	var dist: float = f.position.distance_to(e.position)
+	# rilevamento: chi e' sott'acqua o in copertura dietro una sequoia
+	# sparisce dai "sensori" (gruppo "targetable" + visibilita' in acqua)
+	var can_see: bool = f.game.can_target(f, e)
+	# INGANNO: se il bersaglio e' sparito ma ha lasciato un'immagine-esca, la
+	# CPU ci casca e continua a combattere contro di essa come fosse l'avversario
+	var dec = f.game.decoy_of(e)
+	var fooled: bool = not can_see and dec != null
+	# posizione che la CPU CREDE sia quella del nemico
+	var tgt_pos: Vector2 = e.position
+	if fooled:
+		tgt_pos = dec.position
+	elif not can_see:
+		tgt_pos = last_seen
+	var dist: float = f.position.distance_to(tgt_pos)
 
-	# rilevamento: chi e' sott'acqua sparisce dai "sensori" di chi sta fuori
-	var can_see: bool = f.game.can_see(f, e)
-	if can_see:
-		last_seen = e.position
+	if can_see or fooled:
+		last_seen = tgt_pos
 		lost = false
 	elif not lost:
-		# appena perso il bersaglio: dimentica i piani e mettiti a cercarlo
+		# bersaglio perso davvero (mai visto sparire, o esca svanita/colpita):
+		# dimentica i piani e mettiti a cercarlo
 		lost = true
 		seq.clear()
 		hold_guard = 0.0
@@ -80,12 +93,14 @@ func poll(f, dt: float) -> Dictionary:
 		plan = "idle"
 	if think_t <= 0.0:
 		think_t = randf_range(0.25, 0.5)
-		if can_see:
-			_choose(f, dist)
+		if can_see or fooled:
+			_choose(f, dist)   # ingannata: sceglie i piani contro l'esca
 		else:
 			_choose_blind(f)
 
-	var to_e: Vector2 = e.position - f.position
+	# tutti i piani ragionano sul bersaglio CREDUTO: se e' l'esca, la CPU le
+	# vola incontro e la prende a pugni finche' non si dissolve
+	var to_e: Vector2 = tgt_pos - f.position
 	match plan:
 		"approach":
 			out.move = to_e.normalized()
@@ -103,7 +118,7 @@ func poll(f, dt: float) -> Dictionary:
 			out.move = Vector2(0, strafe_dir)
 		"charge":
 			out.charge = true
-			if (dist < 170.0 and f.game.can_see(f, e)) or f.ki > f.ki_max - 10.0:
+			if (dist < 170.0 and f.game.can_target(f, e)) or f.ki > f.ki_max - 10.0:
 				plan = "idle"
 		"search":
 			# pattuglia sull'ultima posizione nota, restando fuori dall'acqua
@@ -113,6 +128,20 @@ func poll(f, dt: float) -> Dictionary:
 				out.move = d.normalized()
 			else:
 				out.move = Vector2(0.25 * strafe_dir, 0.0)
+		"smash":
+			# nella foresta il bersaglio sparito e' probabilmente in copertura:
+			# si va sotto la sequoia sospetta e la si prende a legnate finche'
+			# non cade (chi ci sta dietro viene scoperto)
+			if smash_tree == null or not is_instance_valid(smash_tree) or smash_tree.destroyed:
+				smash_tree = null
+				plan = "idle"
+			else:
+				var tp: Vector2 = smash_tree.global_position + Vector2(0, -30)
+				var d2: Vector2 = tp - f.position
+				if absf(d2.x) > 52.0 or absf(d2.y) > 40.0:
+					out.move = d2.normalized()
+				elif seq.is_empty():
+					_queue_combo()
 		_:
 			pass
 
@@ -121,8 +150,19 @@ func poll(f, dt: float) -> Dictionary:
 
 
 func _choose_blind(f) -> void:
-	# senza bersaglio rilevabile: cerca, ricarica il ki o cambia quota
+	# senza bersaglio rilevabile: nella foresta il primo sospetto e' che sia in
+	# copertura dietro un tronco, quindi si va ad abbatterlo; altrimenti si
+	# cerca, si ricarica il ki o si cambia quota
 	var r := randf()
+	if f.game.map == "forest" and r < 0.45:
+		# raggio generoso: se l'esca ha attirato la CPU lontano dal tronco,
+		# il sospetto cade comunque sulla sequoia piu' vicina a dov'era il nemico
+		var tr = f.game.tree_near(last_seen, 400.0)
+		if tr != null:
+			smash_tree = tr
+			plan = "smash"
+			plan_t = 2.2
+			return
 	if r < 0.55:
 		plan = "search"
 		plan_t = 1.2
@@ -196,7 +236,7 @@ func _choose(f, dist: float) -> void:
 		elif r < 0.72 and f.ki < 260.0:
 			plan = "charge"
 			plan_t = 1.8
-		elif r < 0.85 and f.ki >= 200.0 and abs(f.position.y - f.enemy.position.y) < 55.0:
+		elif r < 0.85 and f.ki >= 200.0 and abs(f.position.y - last_seen.y) < 55.0:
 			seq.append({"t": 0.05, "act": "beam"})
 			plan = "idle"
 		else:

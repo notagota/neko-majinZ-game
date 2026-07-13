@@ -14,7 +14,10 @@ const HUDScript := preload("res://scripts/hud.gd")
 const SfxScript := preload("res://scripts/sfx_bank.gd")
 const WaterScript := preload("res://scripts/water_zone.gd")
 const MatchScript := preload("res://scripts/match_manager.gd")
+const TreeScene := preload("res://scenes/albero_interattivo.tscn")
+const DecoyScript := preload("res://scripts/decoy.gd")
 
+const MAPS := ["desert", "lake", "forest"]
 const FLOOR_Y := 400.0
 # mappa "lake": la costa rocciosa a sinistra scende a gradoni dolci nel lago,
 # che occupa tutto il lato destro dell'arena (fondale visibile sott'acqua)
@@ -23,6 +26,24 @@ const STEP_W := 150.0       # larghezza di ogni gradone
 const STEP_H := 60.0        # dislivello tra i gradoni
 const WATER_Y := 402.0      # pelo dell'acqua
 const LAKE_BOTTOM := 640.0  # fondale piatto piu' profondo
+# mappa "forest": si combatte a terra tra i tronchi delle sequoie giganti e
+# in volo sopra le chiome, dove restano solo cielo e nuvole (soffitto alzato).
+# E' anche la mappa piu' LARGA (FOREST_ARENA_X): c'e' spazio per un bosco vero,
+# con dieci sequoie interattive dietro cui sparire.
+const FOREST_CEIL := -1050.0     # quota massima di volo nella foresta
+const FOREST_ARENA_X := 1800.0   # semilarghezza dell'arena (le altre: 1150)
+const FOREST_TREE_XS := [-1640.0, -1280.0, -980.0, -620.0, -260.0,
+	180.0, 560.0, 920.0, 1280.0, 1640.0]
+const FOREST_TREE_SC := [0.92, 1.08, 1.0, 1.12, 0.95, 1.06, 0.9, 1.1, 0.98, 1.04]
+# livelli di profondita' della foresta: i lottatori stanno a z 0 come le
+# sequoie interattive, ma chi si NASCONDE scende a Z_HIDDEN e finisce dietro
+# al fusto pur restando davanti al suolo e agli sfondi
+const Z_CLOUDS := -30
+const Z_FAR := -25
+const Z_MID := -20
+const Z_GROUND := -10
+const Z_HIDDEN := -5
+const Z_FRONT := 45   # fronde in primo piano: davanti a lottatori e sequoie
 
 var p1: Fighter
 var p2: Fighter
@@ -39,6 +60,9 @@ var water_front: Node2D
 var lay_clouds: Node2D
 var lay_mount: Node2D
 var lay_mesa: Node2D
+var tree_root: Node2D        # contenitore delle sequoie interattive (forest)
+var trees: Array = []        # AlberoInterattivo vivi, tickati dal game
+var decoys := {}             # Fighter -> immagine-esca viva (vedi spawn_decoy)
 
 var flash_layer: CanvasLayer
 var menu_stream: AudioStream
@@ -47,6 +71,7 @@ var phase := "intro1"
 var phase_t := 0.0
 var mode := "versus"
 var online := false
+var match_mgr: Node = null  # MatchManager della partita online (ping per la HUD)
 var reconciling := false  # replay del netcode in corso: sopprimi effetti e danni
 var menu_sel := 0
 var music: AudioStreamPlayer
@@ -71,6 +96,13 @@ var dbg_beamtest := false
 var dbg_fastko := false
 var dbg_divetest := false
 var dbg_hidetest := false
+var dbg_treetest := false
+var dbg_decoytest := false
+var dbg_skytest := false
+var dbg_widetest := false
+var dbg_tree: Node = null      # albero del --treetest da abbattere
+var dbg_treekill_t := -1.0     # countdown prima dell'abbattimento di test
+var dbg_decoy_t := -1.0        # countdown del --decoytest prima di nascondersi
 
 
 func _ready() -> void:
@@ -91,6 +123,7 @@ func _ready() -> void:
 	battle_streams = {
 		"desert": _load_loop("res://assets/music/battle_desert.wav"),
 		"lake": _load_loop("res://assets/music/battle_lake.wav"),
+		"forest": _load_loop("res://assets/music/battle_forest.wav"),
 	}
 	music = AudioStreamPlayer.new()
 	music.volume_db = -8.0
@@ -125,6 +158,32 @@ func _ready() -> void:
 		elif a == "--lake":
 			_build_world("lake")
 			skip_menu = true
+		elif a == "--forest":
+			_build_world("forest")
+			skip_menu = true
+		elif a == "--treetest":
+			# e2e copertura: P1 si nasconde, l'albero viene abbattuto, P1 riappare
+			_build_world("forest")
+			dbg_treetest = true
+			skip_menu = true
+		elif a == "--decoytest":
+			# e2e inganno: P1 si nasconde e lascia l'esca; la CPU deve
+			# abboccare e attaccarla ("[tree] esca colpita")
+			_build_world("forest")
+			dbg_decoytest = true
+			skip_menu = true
+		elif a == "--skytest":
+			# entrambi in volo sopra le chiome: verifica di cielo e parallasse
+			_build_world("forest")
+			dbg_skytest = true
+			skip_menu = true
+		elif a == "--widetest":
+			# lottatori alla massima distanza a terra: e' il caso peggiore per
+			# l'inquadratura (zoom-out massimo), dove gli strati di parallasse
+			# rischiano di scoprirsi
+			_build_world("forest")
+			dbg_widetest = true
+			skip_menu = true
 		elif a == "--divetest":
 			dbg_divetest = true
 			skip_menu = true
@@ -152,8 +211,16 @@ func _ready() -> void:
 		# MatchManager assegna autorita' e controller di rete ai lottatori
 		online = true
 		skip_menu = true
+		# la mappa l'ha scelta l'host e ha viaggiato nel codice-offerta: i due
+		# giochi costruiscono cosi' la STESSA arena (deserto o lago)
+		var net_map: String = NetworkManager.map
+		if net_map != map:
+			_build_world(net_map)
+		print("[net] arena online: %s (io sono il player %d)"
+			% [map, NetworkManager.local_player()])
 		var mm := MatchScript.new()
 		mm.name = "Match"
+		match_mgr = mm
 		add_child(mm)
 	if skip_menu:
 		_start_match()
@@ -235,6 +302,8 @@ func _build_world(m: String) -> void:
 	lay_clouds = null
 	lay_mount = null
 	lay_mesa = null
+	tree_root = null
+	trees = []
 	world_root = Node2D.new()
 	add_child(world_root)
 	move_child(world_root, 0)  # sempre dietro a lottatori ed effetti
@@ -243,20 +312,28 @@ func _build_world(m: String) -> void:
 	sky_layer.layer = -5
 	add_child(sky_layer)
 	var sky := TextureRect.new()
-	sky.texture = load("res://assets/bg/sky.png" if m == "desert" else "res://assets/bg/bg2_sky.png")
+	var sky_tex := "res://assets/bg/sky.png"
+	if m == "lake":
+		sky_tex = "res://assets/bg/bg2_sky.png"
+	elif m == "forest":
+		sky_tex = "res://assets/bg/bg3_sky.png"
+	sky.texture = load(sky_tex)
 	sky.stretch_mode = TextureRect.STRETCH_SCALE
 	sky.set_anchors_preset(Control.PRESET_FULL_RECT)
 	sky_layer.add_child(sky)
-	# nuvole (su entrambe le mappe)
-	lay_clouds = Node2D.new()
-	world_root.add_child(lay_clouds)
-	var ct: Texture2D = load("res://assets/bg/clouds.png")
-	for i in range(3):
-		var s := Sprite2D.new()
-		s.texture = ct
-		s.centered = false
-		s.position = Vector2(-1700 + i * 1280, -240)
-		lay_clouds.add_child(s)
+	if m != "forest":
+		# nuvole a parallasse manuale (deserto e lago; la foresta usa Parallax2D)
+		lay_clouds = Node2D.new()
+		world_root.add_child(lay_clouds)
+		var ct: Texture2D = load("res://assets/bg/clouds.png")
+		for i in range(3):
+			var s := Sprite2D.new()
+			s.texture = ct
+			s.centered = false
+			s.position = Vector2(-1700 + i * 1280, -240)
+			lay_clouds.add_child(s)
+	else:
+		_build_forest_layers()
 	if m == "desert":
 		# montagne lontane
 		lay_mount = Node2D.new()
@@ -281,10 +358,19 @@ func _build_world(m: String) -> void:
 			lay_mesa.add_child(s)
 	# terreno: sul lago i tile coprono solo la riva alta a sinistra,
 	# i gradoni e il fondale li disegna la WaterZone
-	var gt: Texture2D = load("res://assets/bg/ground.png" if m == "desert" else "res://assets/bg/bg2_ground.png")
+	var gt_path := "res://assets/bg/ground.png"
+	if m == "lake":
+		gt_path = "res://assets/bg/bg2_ground.png"
+	elif m == "forest":
+		gt_path = "res://assets/bg/bg3_ground.png"
+	var gt: Texture2D = load(gt_path)
 	var gr := Node2D.new()
+	if m == "forest":
+		gr.z_index = Z_GROUND  # sopra gli sfondi, sotto chi si nasconde
 	world_root.add_child(gr)
-	for i in range(-8, 9):
+	# la foresta e' larga il doppio: servono piu' tessere di terreno
+	var tiles := 11 if m == "forest" else 8
+	for i in range(-tiles, tiles + 1):
 		if m == "lake" and (i + 1) * 256.0 > -256.0:
 			continue
 		var s := Sprite2D.new()
@@ -302,6 +388,85 @@ func _build_world(m: String) -> void:
 		water_front.game = self
 		water_front.front = true
 		add_child(water_front)
+	elif m == "forest":
+		# sequoie interattive: stesso piano dei lottatori ma leggermente
+		# dietro (ordine dell'albero di scena), davanti agli strati Parallax2D
+		tree_root = Node2D.new()
+		world_root.add_child(tree_root)
+		_reset_trees()
+
+
+# Sfondi della foresta con il nodo Parallax2D (il successore di
+# ParallaxBackground): ogni strato scorre a una frazione della camera.
+# Dal lontano al vicino, con i z_index della mappa (vedi Z_* qui sotto):
+#   PxClouds (0.12): nuvole quasi fisse, si scoprono solo volando in alto
+#   PxFar    (0.30, 0.85): cresta di conifere nella foschia
+#   PxMid    (0.60, 0.93): sequoie scure di media distanza con varchi
+#   PxFront  (1.30, 1.12, z 45): fronde DAVANTI ai lottatori, spariscono
+#            in fretta salendo (fattore > 1 = primo piano)
+# Le sequoie interattive stanno nel mondo vero (tree_root, fattore 1) a z 0,
+# cioe' allo stesso livello dei lottatori: chi si nasconde scende a Z_HIDDEN
+# e finisce DIETRO al fusto (che a sua volta diventa semitrasparente).
+func _build_forest_layers() -> void:
+	var clouds := _parallax_layer(Vector2(0.12, 0.10), Vector2(1280, 0), 4, Z_CLOUDS)
+	var ct: Texture2D = load("res://assets/bg/clouds.png")
+	var cs := Sprite2D.new()
+	cs.texture = ct
+	cs.centered = false
+	cs.position = Vector2(-640, -140)
+	clouds.add_child(cs)
+	var far := _parallax_layer(Vector2(0.3, 0.85), Vector2(512, 0), 8, Z_FAR)
+	var fs := Sprite2D.new()
+	fs.texture = load("res://assets/bg/forest_far.png")
+	fs.centered = false
+	fs.position = Vector2(-256, -560)
+	fs.scale = Vector2(1.0, 1.15)  # allungata: nessuno spiraglio sopra il suolo
+	far.add_child(fs)
+	var mid := _parallax_layer(Vector2(0.6, 0.93), Vector2(512, 0), 8, Z_MID)
+	var ms := Sprite2D.new()
+	ms.texture = load("res://assets/bg/forest_mid.png")
+	ms.centered = false
+	ms.position = Vector2(-256, -433)
+	mid.add_child(ms)
+	var front := _parallax_layer(Vector2(1.3, 1.35), Vector2(512, 0), 10, Z_FRONT)
+	var fr := Sprite2D.new()
+	fr.texture = load("res://assets/bg/forest_front.png")
+	fr.centered = false
+	# Parallax2D mette il figlio a  y + (scroll.y - 1) * (135 - camera.y):
+	# a terra (camera ~300) la frangia resta appena sopra il bordo alto e ci
+	# penzola dentro; appena si sale in volo scorre giu' ed esce dallo schermo
+	# (con scroll.y 1.35 sparisce del tutto gia' a mezz'aria, come deve essere
+	# per un primo piano: non si vedono rami sopra le chiome)
+	fr.position = Vector2(-256, 170)
+	front.add_child(fr)
+
+
+func _parallax_layer(scroll: Vector2, rep: Vector2, times: int, z: int) -> Parallax2D:
+	var px := Parallax2D.new()
+	px.scroll_scale = scroll
+	px.repeat_size = rep
+	px.repeat_times = times
+	px.z_index = z
+	world_root.add_child(px)
+	return px
+
+
+# Ripianta le sequoie interattive (a inizio round gli alberi abbattuti
+# ricrescono): posizioni fisse, taglie leggermente diverse.
+func _reset_trees() -> void:
+	for tr in trees:
+		if is_instance_valid(tr):
+			tr.queue_free()
+	trees = []
+	if map != "forest" or tree_root == null:
+		return
+	for i in range(FOREST_TREE_XS.size()):
+		var tr: Node2D = TreeScene.instantiate()
+		tr.game = self
+		tr.position = Vector2(FOREST_TREE_XS[i], FLOOR_Y)
+		tr.scale = Vector2.ONE * FOREST_TREE_SC[i]
+		tree_root.add_child(tr)
+		trees.append(tr)
 
 
 # --- acqua e visibilita' ------------------------------------------------------
@@ -324,6 +489,83 @@ func submerged(f: Fighter) -> bool:
 # chi e' sott'acqua non puo' essere rilevato da chi sta fuori
 func can_see(viewer: Fighter, target: Fighter) -> bool:
 	return not submerged(target) or submerged(viewer)
+
+
+# bersagliabile = visibile E nel gruppo "targetable": chi e' in copertura
+# dietro una sequoia resta semitrasparente sullo schermo ma sparisce da
+# lock-on, homing e sensori dell'IA (requisito della mappa foresta)
+func can_target(viewer: Fighter, target: Fighter) -> bool:
+	return can_see(viewer, target) and target.is_in_group("targetable")
+
+
+# quota massima di volo: nella foresta si sale fin sopra le chiome
+func ceiling_y() -> float:
+	return FOREST_CEIL if map == "forest" else Fighter.CEIL_Y
+
+
+# semilarghezza dell'arena: la foresta e' piu' larga delle altre mappe
+func arena_x() -> float:
+	return FOREST_ARENA_X if map == "forest" else Fighter.ARENA_X
+
+
+# --- immagini-esca (inganno della copertura) ---------------------------------
+
+# Punto verso cui puntare `target`: il bersaglio vero se lo si rileva, la sua
+# immagine-esca se e' in copertura e ne ha lasciata una, altrimenti niente
+# (null = nessun aggancio). Lo usano lo scatto homing e le sfere di ki.
+func aim_point(viewer: Fighter, target: Fighter) -> Variant:
+	if target == null:
+		return null
+	if can_target(viewer, target):
+		return target.center()
+	var d = decoy_of(target)
+	return d.center() if d != null else null
+
+
+# l'immagine-esca ancora viva lasciata da `f` (null se non c'e')
+func decoy_of(f: Fighter) -> Node:
+	var d = decoys.get(f)
+	if d == null or not is_instance_valid(d) or d.dead:
+		return null
+	return d
+
+
+func spawn_decoy(f: Fighter, pose: Dictionary) -> void:
+	if reconciling:
+		return  # nel replay l'esca originale esiste gia'
+	var old = decoys.get(f)
+	if old != null and is_instance_valid(old):
+		old.dead = true  # una sola esca per lottatore
+	var d := DecoyScript.new()
+	d.setup(f, pose)
+	actor_root.add_child(d)
+	actors.append(d)
+	decoys[f] = d
+
+
+# --- sequoie interattive (mappa "forest") ------------------------------------
+
+# la sequoia nella cui zona di copertura (Area2D) si trova il lottatore
+func tree_at(f: Fighter) -> Node:
+	for tr in trees:
+		if not tr.destroyed and tr.hide_rect().has_point(f.center()):
+			return tr
+	return null
+
+
+# la sequoia ancora in piedi piu' vicina a un punto (entro max_dx): l'IA la usa
+# per andare ad abbattere il tronco dove ha perso di vista il bersaglio
+func tree_near(pos: Vector2, max_dx: float = 150.0) -> Node:
+	var best: Node = null
+	var bd := max_dx
+	for tr in trees:
+		if tr.destroyed:
+			continue
+		var d: float = absf(tr.global_position.x - pos.x)
+		if d < bd:
+			bd = d
+			best = tr
+	return best
 
 
 func splash_at(x: float, big: bool) -> void:
@@ -446,15 +688,18 @@ func _tick_menu() -> void:
 			get_tree().change_scene_to_file("res://scenes/multiplayer_menu.tscn")
 			return
 		mode = "versus" if menu_sel == 0 else "training"
-		map_sel = 0 if map == "desert" else 1
+		map_sel = maxi(0, MAPS.find(map))
 		phase = "mapsel"
 		phase_t = 0.0
 		sfx.play("select", 1.2)
 
 
 func _tick_mapsel() -> void:
-	if Input.is_action_just_pressed("p_left") or Input.is_action_just_pressed("p_right"):
-		map_sel = 1 - map_sel
+	if Input.is_action_just_pressed("p_left"):
+		map_sel = (map_sel + MAPS.size() - 1) % MAPS.size()
+		sfx.play("select")
+	if Input.is_action_just_pressed("p_right"):
+		map_sel = (map_sel + 1) % MAPS.size()
 		sfx.play("select")
 	if Input.is_action_just_pressed("p_menu"):
 		phase = "menu"
@@ -462,7 +707,7 @@ func _tick_mapsel() -> void:
 		sfx.play("select", 0.8)
 		return
 	if Input.is_action_just_pressed("p_accept") or Input.is_action_just_pressed("p_attack"):
-		var m := "desert" if map_sel == 0 else "lake"
+		var m: String = MAPS[map_sel]
 		if m != map:
 			_build_world(m)
 		sfx.play("round")
@@ -491,9 +736,14 @@ func _start_match() -> void:
 func _start_round() -> void:
 	round_time = 99.0
 	_clear_actors()
+	_reset_trees()  # nella foresta gli alberi abbattuti ricrescono a ogni round
 	if map == "desert":
 		p1.reset(Vector2(-130, FLOOR_Y), 1)
 		p2.reset(Vector2(130, FLOOR_Y), -1)
+	elif map == "forest":
+		# nella radura centrale, tra le sequoie interattive
+		p1.reset(Vector2(-200, FLOOR_Y), 1)
+		p2.reset(Vector2(200, FLOOR_Y), -1)
 	else:
 		# sul lago: P1 sulla riva alta, CPU in volo sopra l'acqua
 		p1.reset(Vector2(-400, FLOOR_Y), 1)
@@ -519,6 +769,7 @@ func _clear_actors() -> void:
 	for a in actors:
 		a.queue_free()
 	actors = []
+	decoys = {}  # le immagini-esca vivono nella lista actors: spariscono con essa
 
 
 func _time_up() -> void:
@@ -553,6 +804,11 @@ func _end_round() -> void:
 	phase = "round_end"
 	phase_t = 0.0
 	slow_target = 1.0
+	# a round finito nessuno resta in copertura (ne' dietro al tronco, ne' fuori
+	# dal mirino): posa di vittoria e sconfitta si devono vedere
+	for f in [p1, p2]:
+		if f.hide_tree != null or f.state == Fighter.St.HIDE:
+			f.force_unhide()
 	if round_winner >= 0:
 		if mode != "training":
 			wins[round_winner] += 1
@@ -577,6 +833,21 @@ func _match_over() -> void:
 		_set_msg("HAI VINTO!" if p1_won else "VITTORIA DELLA CPU",
 			"INVIO: rivincita   R: riavvia   ESC: menu", 9999.0)
 	sfx.play("round", 0.8)
+
+
+# Test della foresta: mette P1 in copertura dietro `tr` (dov'e' gia' stato
+# posizionato) e, se richiesto, programma l'abbattimento della sequoia.
+func _dbg_hide_p1(tr: Node, kill: bool) -> void:
+	if p1.state != Fighter.St.MOVE:
+		return
+	p1._record_pose()
+	p1._enter_hide(tr)
+	print("[test] p1 targetable=%s hide=%s aria=%s esca=%s" %
+		[p1.is_in_group("targetable"), p1.state == Fighter.St.HIDE,
+		not p1.grounded(), decoy_of(p1) != null])
+	if kill:
+		dbg_tree = tr
+		dbg_treekill_t = 1.2
 
 
 func _tick_phase(dt: float) -> void:
@@ -619,6 +890,37 @@ func _tick_phase(dt: float) -> void:
 			if dbg_hidetest and phase_t >= 0.4 and p2.state == Fighter.St.MOVE:
 				dbg_hidetest = false
 				p2.position = Vector2(500, 560)  # CPU immersa: deve sparire
+			if dbg_skytest and phase_t >= 0.2 and p1.state == Fighter.St.MOVE:
+				dbg_skytest = false
+				p1.position = Vector2(-140, -560)  # al pelo delle chiome
+				p2.position = Vector2(140, -840)   # in alto nel cielo
+			# --decoytest: P1 e la CPU si affiancano a mezz'aria accanto a una
+			# sequoia; mezzo secondo dopo P1 sparisce dietro il tronco lasciando
+			# l'esca sotto il naso della CPU, che deve continuare a picchiare
+			# l'immagine ("[tree] esca colpita")
+			if dbg_decoytest and phase_t >= 0.4 and dbg_decoy_t < 0.0 and trees.size() > 4:
+				var t5 = trees[4]
+				p1.position = Vector2(t5.position.x + 40.0, FLOOR_Y - 240.0)
+				p2.position = Vector2(t5.position.x + 150.0, FLOOR_Y - 240.0)
+				dbg_decoy_t = 0.5
+			if dbg_decoy_t > 0.0:
+				dbg_decoy_t -= dt
+				if dbg_decoy_t <= 0.0:
+					dbg_decoytest = false
+					_dbg_hide_p1(trees[4], false)
+			# --treetest: copertura A MEZZA ALTEZZA del fusto (la zona corre
+			# lungo tutto l'albero), poi la sequoia viene abbattuta
+			if dbg_treetest and phase_t >= 0.4 and trees.size() > 4:
+				dbg_treetest = false
+				p1.position = Vector2(trees[4].position.x + 40.0, FLOOR_Y - 240.0)
+				_dbg_hide_p1(trees[4], true)
+			if dbg_treekill_t > 0.0:
+				dbg_treekill_t -= dt
+				if dbg_treekill_t <= 0.0 and dbg_tree != null:
+					dbg_tree.take_damage(999.0, p2.position.x)
+					dbg_tree = null
+					print("[test] p1 targetable=%s state=%d" %
+						[p1.is_in_group("targetable"), p1.state])
 			if round_time <= 0.0:
 				round_time = 0.0
 				_time_up()
@@ -708,6 +1010,16 @@ func _physics_process(delta: float) -> void:
 			else:
 				alive.append(a)
 		actors = alive
+		# sequoie della foresta: ondeggiano, incassano e cadono col tempo
+		# di gioco (rispettano hitstop e slow-mo come ogni entita')
+		var t_alive: Array = []
+		for tr in trees:
+			tr.tick(dt)
+			if tr.dead:
+				tr.queue_free()
+			else:
+				t_alive.append(tr)
+		trees = t_alive
 	_tick_camera(delta)
 	if phase == "fight" and round_num == 1 and wins == [0, 0] and phase_t < 7.0:
 		hint_a = 1.0
@@ -747,9 +1059,14 @@ func _tick_camera(delta: float) -> void:
 	var half_w := 240.0 / cam.zoom.x
 	var half_h := 135.0 / cam.zoom.x
 	mid.y -= 20.0
-	mid.x = clamp(mid.x, -1300.0 + half_w, 1300.0 - half_w)
-	var y_max := 560.0 if map == "lake" else 470.0
-	mid.y = clamp(mid.y, -520.0 + half_h, y_max - half_h)
+	var lim_x := arena_x() + 150.0  # bordo del mondo disegnato (arena + margine)
+	mid.x = clamp(mid.x, -lim_x + half_w, lim_x - half_w)
+	# sul lago la camera puo' scendere fin sotto il fondale (LAKE_BOTTOM):
+	# chi si immerge resta sempre inquadrato, col fondo visibile sotto i piedi;
+	# nella foresta invece puo' salire fin sopra le chiome delle sequoie
+	var y_max := (LAKE_BOTTOM + 70.0) if map == "lake" else 470.0
+	var y_min := (FOREST_CEIL - 100.0) if map == "forest" else -520.0
+	mid.y = clamp(mid.y, y_min + half_h, y_max - half_h)
 	cam.position = cam.position.lerp(mid, 1.0 - exp(-7.0 * delta))
 	shake_amp = move_toward(shake_amp, 0.0, 18.0 * delta)
 	cam.offset = Vector2(randf_range(-1, 1), randf_range(-1, 1)) * shake_amp
@@ -781,6 +1098,7 @@ func local_fighter() -> Fighter:
 
 func _exit_online() -> void:
 	online = false
+	match_mgr = null
 	NetworkManager.close()
 	var mm := get_node_or_null("Match")
 	if mm != null:
@@ -835,13 +1153,28 @@ func try_hit(attacker: Fighter, r: Rect2, dmg: float, opts: Dictionary = {}) -> 
 	# il danno reale e' gia' stato applicato dalla simulazione originale
 	if phase != "fight" or reconciling:
 		return "miss"
+	# le sequoie incassano qualsiasi colpo che ne tocca il tronco (anche se
+	# l'attacco manca l'avversario): "tree" dice al chiamante che il colpo
+	# e' comunque andato a segno, cosi' sfere e raggi si fermano sul legno
+	var tree_hit := false
+	for tr in trees:
+		if tr.hit_by(r, dmg, attacker.position.x):
+			tree_hit = true
 	var victim := attacker.enemy
+	# l'immagine-esca dell'avversario in copertura: colpirla la dissolve (e
+	# svela l'inganno) ma non fa alcun danno — vale come colpo andato a vuoto
+	var fake_hit := false
+	var dec = decoy_of(victim)
+	if dec != null and r.intersects(dec.hurt_rect()):
+		dec.pop()
+		fake_hit = true
+	var no_hit := "tree" if tree_hit else ("decoy" if fake_hit else "miss")
 	if victim == null or victim.invuln > 0.0:
-		return "miss"
+		return no_hit
 	if victim.state in [Fighter.St.DOWN, Fighter.St.KO]:
-		return "miss"
+		return no_hit
 	if not r.intersects(victim.hurt_rect()):
-		return "miss"
+		return no_hit
 	var contact: Vector2 = (r.get_center() + victim.center()) * 0.5
 	attacker.ki = min(attacker.ki_max, attacker.ki + 9.0)
 	if victim.state == Fighter.St.GUARD:

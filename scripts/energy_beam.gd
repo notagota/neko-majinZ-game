@@ -38,10 +38,12 @@ func setup(f: Fighter) -> void:
 	material = mat
 	texture_repeat = CanvasItem.TEXTURE_REPEAT_ENABLED
 	scale.x = -1.0 if dir == -1 else 1.0
+	# il raggio si spegne al bordo dell'arena (piu' larga nella foresta)
+	var edge: float = f.game.arena_x() + 150.0
 	if dir == 1:
-		max_len = 1300.0 - position.x
+		max_len = edge - position.x
 	else:
-		max_len = position.x + 1300.0
+		max_len = position.x + edge
 	max_len = min(max_len, 980.0)
 	end_t = max_len / GROW + 0.75
 
@@ -68,11 +70,14 @@ func tick(dt: float) -> void:
 			{"launch": Vector2(dir * 430.0, -140.0), "chip": 10.0, "heavy": true})
 		if res != "miss":
 			hit_done = true
-			# il raggio si ferma sul bersaglio e preme ancora un momento
-			var victim := owner_f.enemy
-			if victim != null:
-				var d := absf(victim.center().x - position.x)
-				beam_len = clamp(d, 40.0, beam_len)
+			# il raggio si ferma sul bersaglio e preme ancora un momento; se ha
+			# morso solo un tronco ("tree") o un'immagine-esca ("decoy") resta
+			# invece dov'e' arrivato
+			if res == "hit" or res == "blocked":
+				var victim := owner_f.enemy
+				if victim != null:
+					var d := absf(victim.center().x - position.x)
+					beam_len = clamp(d, 40.0, beam_len)
 			max_len = beam_len
 			end_t = min(end_t, t + 0.6)
 			_impact_sparks(_tip(), res == "hit")

@@ -20,6 +20,14 @@ extends Node
 #     snapshot precedente all'errore e risimulato fino a oggi con gli
 #     input veri ("dove dovrebbe essere"), in modalita' silenziosa:
 #     game.reconciling e sfx.muted sopprimono danni, effetti e suoni doppi.
+#  5. SINCRONIZZAZIONE DEI TICK - all'avvio i due lati fanno un handshake
+#     (ping finche' l'altro MatchManager esiste, poi START affidabile
+#     dall'host): l'ospite parte gia' avanti di mezzo RTT in tick, cosi' i
+#     due contatori corrono allineati al tempo reale. Senza questo, ogni
+#     tick di scarto tra i clock diventava LAG PERCEPITO COSTANTE (~17 ms
+#     l'uno) o riconciliazioni continue. Il contatore non si ferma mai
+#     durante i round, quindi l'allineamento non deriva. Il ping resta
+#     misurato per tutta la partita e mostrato nella HUD.
 #
 # DOVE STA LA LOGICA DI MOVIMENTO: NON qui. Il movimento resta interamente
 # in fighter.gd (_tick_move e gli altri _tick_*): questo script decide solo
@@ -36,9 +44,11 @@ extends Node
 
 const NetC := preload("res://scripts/net_controller.gd")
 
-const REDUNDANCY := 5    # input degli ultimi 5 frame in ogni pacchetto
+const REDUNDANCY := 10   # input degli ultimi 10 frame in ogni pacchetto (~166 ms
+						 # di packet loss coperti; il pacchetto resta minuscolo)
 const HISTORY := 120     # storia tenuta in memoria: 2 s a 60 Hz
 const TICK_DT := 1.0 / 60.0
+const START_TIMEOUT := 6.0   # se l'handshake non arriva, si parte comunque
 
 var game: Node2D
 var local_slot := 1          # 1 = host/P1, 2 = ospite/P2
@@ -61,6 +71,15 @@ var tick_meta := {}          # tick -> {dt, froze}: come la partita ha simulato 
 var corrections := 0         # riconciliazioni eseguite (diagnostica)
 var rx_logged := false
 var probe := false           # --netprobe: input sintetici per collaudare predizione/correzioni
+
+# --- avvio sincronizzato e misura della latenza ---
+var started := false         # handshake completato: la simulazione corre
+var start_wait := 0.0        # da quanto aspettiamo l'handshake (per il fallback)
+var hello_t := 0.0           # timer di reinvio di ping/handshake
+var remote_alive := false    # il MatchManager dell'avversario esiste e risponde
+var ping_ms := 0.0           # RTT levigato in millisecondi (mostrato dalla HUD)
+var barrier_tick := 0        # ultimo tick fuori da "fight": mai riconciliare prima
+							 # (nei cambi round i fighter vengono riposizionati)
 
 
 func _ready() -> void:
@@ -88,12 +107,34 @@ func _ready() -> void:
 	probe = "--netprobe" in OS.get_cmdline_user_args()
 
 
-func _physics_process(_dt: float) -> void:
+func _physics_process(dt: float) -> void:
 	if not NetworkManager.is_online():
 		return
-	if game.phase == "intro1":
-		return  # margine perche' anche l'altro lato finisca di caricare l'arena
+	if not started:
+		# HANDSHAKE DI AVVIO: ping ripetuto finche' il MatchManager remoto
+		# non risponde (la scena puo' caricarsi in momenti diversi sulle due
+		# macchine), poi l'host manda lo START affidabile e parte dal tick 0;
+		# l'ospite partira' avanti di mezzo RTT (vedi _net_start). Cosi' i due
+		# contatori corrono allineati e nessuno "vive nel passato" dell'altro.
+		start_wait += dt
+		hello_t -= dt
+		if hello_t <= 0.0:
+			hello_t = 0.2
+			_net_ping.rpc(Time.get_ticks_msec())
+		if local_slot == 1 and remote_alive and (ping_ms > 0.0 or start_wait >= 2.0):
+			_net_start.rpc(ping_ms)
+			_begin(0)
+		elif start_wait >= START_TIMEOUT:
+			_begin(0)  # l'altro lato non risponde: meglio partire che bloccare
+		return
+	# ping periodico anche in partita: alimenta la HUD e la diagnostica
+	hello_t -= dt
+	if hello_t <= 0.0:
+		hello_t = 1.0
+		_net_ping.rpc(Time.get_ticks_msec())
 	tick += 1
+	if game.phase != "fight":
+		barrier_tick = tick  # storia precedente non confrontabile (round nuovi ecc.)
 
 	# ------ 1) input locale: cattura, memorizza nel buffer, applica subito ------
 	# (il lottatore locale non aspetta MAI la rete: zero lag aggiunto)
@@ -102,7 +143,7 @@ func _physics_process(_dt: float) -> void:
 	local_f.execute_inputs(NetworkManager.decode_input(bits, local_inputs.get(tick - 1, 0)))
 
 	# ------ 2) invio con ridondanza: gli ultimi REDUNDANCY tick in un colpo ------
-	# pacchetto minuscolo (un int di partenza + 5 int32): se si perde, il
+	# pacchetto minuscolo (un int di partenza + 10 int32): se si perde, il
 	# successivo ricopre gli stessi tick e nessuno se ne accorge
 	var start := maxi(1, tick - REDUNDANCY + 1)
 	var window := PackedInt32Array()
@@ -133,7 +174,47 @@ func _physics_process(_dt: float) -> void:
 	tick_meta.erase(old)
 
 	if probe and tick % 300 == 0:
-		print("[net] riconciliazioni: %d (tick %d)" % [corrections, tick])
+		print("[net] riconciliazioni: %d (tick %d, ping %d ms, offset %+d tick)"
+			% [corrections, tick, int(ping_ms), latest_remote_tick - tick])
+
+
+# ============================================================================
+# HANDSHAKE DI AVVIO + MISURA DEL PING (RTT)
+# ============================================================================
+func _begin(t0: int) -> void:
+	started = true
+	tick = t0
+	barrier_tick = t0
+	print("[net] simulazione avviata dal tick %d (ping %d ms)" % [t0, int(ping_ms)])
+
+
+# Unreliable ma reinviato a intervallo fisso: fa da "hello" dell'handshake e
+# da sonda del ping per tutta la partita.
+@rpc("any_peer", "call_remote", "unreliable")
+func _net_ping(ms: int) -> void:
+	if multiplayer.get_remote_sender_id() != remote_peer:
+		return
+	remote_alive = true
+	_net_pong.rpc(ms)
+
+
+@rpc("any_peer", "call_remote", "unreliable")
+func _net_pong(ms: int) -> void:
+	if multiplayer.get_remote_sender_id() != remote_peer:
+		return
+	remote_alive = true
+	var rtt := float(Time.get_ticks_msec() - ms)
+	ping_ms = rtt if ping_ms <= 0.0 else lerpf(ping_ms, rtt, 0.2)
+
+
+# Reliable: l'host lo invia una volta sola quando sa che l'altro lato esiste.
+# L'ospite compensa il viaggio del messaggio partendo avanti di mezzo RTT.
+@rpc("any_peer", "call_remote", "reliable")
+func _net_start(host_rtt_ms: float) -> void:
+	if multiplayer.get_remote_sender_id() != remote_peer or started:
+		return
+	var rtt := maxf(ping_ms, host_rtt_ms)
+	_begin(int(roundf(rtt * 0.5 / (TICK_DT * 1000.0))))
 
 
 # ============================================================================
@@ -154,8 +235,10 @@ func _rx_inputs(start_tick: int, window: PackedInt32Array) -> void:
 		if remote_inputs.has(t):
 			continue  # gia' noto grazie alla ridondanza di un pacchetto precedente
 		remote_inputs[t] = window[i]
-		# tick gia' simulato con un input diverso da quello vero?
-		if t <= tick and first_bad < 0 and used_inputs.get(t, window[i]) != window[i]:
+		# tick gia' simulato con un input diverso da quello vero? (i tick
+		# prima della barriera sono di un "mondo" gia' riposizionato: si ignorano)
+		if t <= tick and t > barrier_tick and first_bad < 0 \
+				and used_inputs.get(t, window[i]) != window[i]:
 			first_bad = t
 	# la predizione futura riparte sempre dall'input reale piu' recente
 	var newest := start_tick + window.size() - 1
