@@ -1,5 +1,5 @@
 class_name Fighter
-extends Node2D
+extends CharacterBody2D
 
 # Lottatore stile Super Sonic Warriors 2: volo libero, combo, ki.
 # Le pose native guardano a DESTRA: flip_h quando facing == -1 (sinistra).
@@ -103,6 +103,17 @@ func setup(g: Node2D, pal: String, disp_name: String, ctrl) -> void:
 	# i lottatori bersagliabili stanno nel gruppo "targetable": chi si
 	# nasconde dietro una sequoia ne esce e sparisce da homing e sensori
 	add_to_group("targetable")
+	# Corpo 2D pronto a interagire con i limiti StaticBody2D dello stage.
+	# Il combattimento conserva il clamp deterministico gia' usato dal netcode.
+	collision_layer = 1
+	collision_mask = 2
+	var body_collision := CollisionShape2D.new()
+	body_collision.name = "BodyCollision"
+	var body_shape := RectangleShape2D.new()
+	body_shape.size = Vector2(32.0, 50.0)
+	body_collision.position = Vector2(0.0, -25.0)
+	body_collision.shape = body_shape
+	add_child(body_collision)
 	aura = Sprite2D.new()
 	aura.texture = load("res://assets/sprites/fx/aura.png")
 	aura.position = Vector2(0, -28)
@@ -135,6 +146,7 @@ func _build_frames(pal: String) -> SpriteFrames:
 
 func reset(pos: Vector2, face: int) -> void:
 	position = pos
+	scale = Vector2.ONE
 	facing = face
 	hp = hp_max
 	hp_lag = hp_max
@@ -228,6 +240,7 @@ func tick(dt: float) -> void:
 	var inp := _empty_input()
 	if controller != null and state not in [St.INTRO, St.KO, St.WIN]:
 		inp = controller.poll(self, dt)
+		inp = game.filter_fighter_input(self, inp)
 
 	var was_air := not grounded()
 	match state:
@@ -541,9 +554,10 @@ func _tick_launched(dt: float, inp: Dictionary, is_ko: bool) -> void:
 		vel.y += 880.0 * dt
 		vel.x = move_toward(vel.x, 0.0, 60.0 * dt)
 	position += vel * dt
-	if position.x <= -ARENA_X + 1.0 or position.x >= ARENA_X - 1.0:
+	var current_arena_x: float = game.arena_x()
+	if position.x <= -current_arena_x + 1.0 or position.x >= current_arena_x - 1.0:
 		vel.x *= -0.55
-		position.x = clamp(position.x, -ARENA_X + 1.0, ARENA_X - 1.0)
+		position.x = clamp(position.x, -current_arena_x + 1.0, current_arena_x - 1.0)
 	var fy := _floor()
 	if position.y >= fy:
 		position.y = fy

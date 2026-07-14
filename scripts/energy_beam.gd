@@ -67,7 +67,8 @@ func tick(dt: float) -> void:
 		var x0 := position.x if dir == 1 else position.x - beam_len
 		var r := Rect2(Vector2(x0, position.y - 27.0), Vector2(beam_len, 54.0))
 		var res = owner_f.game.try_hit(owner_f, r, 40.0,
-			{"launch": Vector2(dir * 430.0, -140.0), "chip": 10.0, "heavy": true})
+			{"launch": Vector2(dir * 430.0, -140.0), "chip": 10.0, "heavy": true,
+			 "desert_perspective": true})
 		if res != "miss":
 			hit_done = true
 			# il raggio si ferma sul bersaglio e preme ancora un momento; se ha

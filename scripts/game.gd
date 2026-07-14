@@ -16,6 +16,7 @@ const WaterScript := preload("res://scripts/water_zone.gd")
 const MatchScript := preload("res://scripts/match_manager.gd")
 const TreeScene := preload("res://scenes/albero_interattivo.tscn")
 const DecoyScript := preload("res://scripts/decoy.gd")
+const DesertPerspectiveScript := preload("res://scripts/desert_perspective.gd")
 
 const MAPS := ["desert", "lake", "forest"]
 const FLOOR_Y := 400.0
@@ -63,6 +64,7 @@ var lay_mesa: Node2D
 var tree_root: Node2D        # contenitore delle sequoie interattive (forest)
 var trees: Array = []        # AlberoInterattivo vivi, tickati dal game
 var decoys := {}             # Fighter -> immagine-esca viva (vedi spawn_decoy)
+var desert_perspective       # controller delle due prospettive 2D del deserto
 
 var flash_layer: CanvasLayer
 var menu_stream: AudioStream
@@ -93,6 +95,8 @@ var shake_amp := 0.0
 var shot_path := ""
 var shot_t := -1.0
 var dbg_beamtest := false
+var dbg_beamtest_cpu := false
+var dbg_dinohit := false
 var dbg_fastko := false
 var dbg_divetest := false
 var dbg_hidetest := false
@@ -108,6 +112,9 @@ var dbg_decoy_t := -1.0        # countdown del --decoytest prima di nascondersi
 func _ready() -> void:
 	randomize()
 	_setup_input()
+	desert_perspective = DesertPerspectiveScript.new()
+	desert_perspective.setup(self)
+	add_child(desert_perspective)
 	_build_world("desert")
 	_build_fighters()
 	cam = Camera2D.new()
@@ -148,6 +155,15 @@ func _ready() -> void:
 			skip_menu = true
 		elif a == "--beamtest":
 			dbg_beamtest = true
+			skip_menu = true
+		elif a == "--perspectivecpu":
+			# test speculare: e' P2 a spedire il Player contro mesa_1
+			dbg_beamtest_cpu = true
+			skip_menu = true
+		elif a == "--dinohit":
+			# flusso completo: entra in Fase 2 e scaccia il dinosauro
+			dbg_beamtest = true
+			dbg_dinohit = true
 			skip_menu = true
 		elif a == "--fastko":
 			dbg_fastko = true
@@ -292,6 +308,8 @@ func _setup_input() -> void:
 
 func _build_world(m: String) -> void:
 	map = m
+	if desert_perspective != null:
+		desert_perspective.clear_stage()
 	if world_root != null:
 		world_root.queue_free()
 	if sky_layer != null:
@@ -324,6 +342,8 @@ func _build_world(m: String) -> void:
 	if m != "forest":
 		# nuvole a parallasse manuale (deserto e lago; la foresta usa Parallax2D)
 		lay_clouds = Node2D.new()
+		if m == "desert":
+			lay_clouds.z_index = -30
 		world_root.add_child(lay_clouds)
 		var ct: Texture2D = load("res://assets/bg/clouds.png")
 		for i in range(3):
@@ -337,6 +357,7 @@ func _build_world(m: String) -> void:
 	if m == "desert":
 		# montagne lontane
 		lay_mount = Node2D.new()
+		lay_mount.z_index = -20
 		world_root.add_child(lay_mount)
 		var mt: Texture2D = load("res://assets/bg/mountains.png")
 		for i in range(3):
@@ -345,17 +366,9 @@ func _build_world(m: String) -> void:
 			s.centered = false
 			s.position = Vector2(-1850 + i * 1280, FLOOR_Y - 148)
 			lay_mount.add_child(s)
-		# mesas di media distanza
-		lay_mesa = Node2D.new()
-		world_root.add_child(lay_mesa)
-		var mesa_xs := [-1120, -680, -330, 340, 760, 1210]
-		for i in range(mesa_xs.size()):
-			var s := Sprite2D.new()
-			s.texture = load("res://assets/bg/mesa_%d.png" % (i % 2))
-			s.centered = false
-			s.scale = Vector2(0.9, 0.9)
-			s.position = Vector2(mesa_xs[i], FLOOR_Y + 4 - s.texture.get_height() * 0.9)
-			lay_mesa.add_child(s)
+		# Le due composizioni delle mesas vengono gestite da un controller
+		# dedicato: Fase 1 frontale e Fase 2 laterale restano entrambe Node2D.
+		desert_perspective.build_desert(world_root)
 	# terreno: sul lago i tile coprono solo la riva alta a sinistra,
 	# i gradoni e il fondale li disegna la WaterZone
 	var gt_path := "res://assets/bg/ground.png"
@@ -505,7 +518,17 @@ func ceiling_y() -> float:
 
 # semilarghezza dell'arena: la foresta e' piu' larga delle altre mappe
 func arena_x() -> float:
+	if map == "desert" and desert_perspective != null:
+		return desert_perspective.arena_half_width()
 	return FOREST_ARENA_X if map == "forest" else Fighter.ARENA_X
+
+
+# Un solo punto filtra i comandi prima che entrino nella macchina a stati:
+# nel deserto blocca l'asse Y e applica il breve malus della Fase 2.
+func filter_fighter_input(f: Fighter, input_state: Dictionary) -> Dictionary:
+	if desert_perspective != null:
+		return desert_perspective.filter_input(f, input_state)
+	return input_state
 
 
 # --- immagini-esca (inganno della copertura) ---------------------------------
@@ -652,6 +675,8 @@ func _enter_menu() -> void:
 	slow_target = 1.0
 	freeze_t = 0.0
 	_clear_actors()
+	if desert_perspective != null:
+		desert_perspective.reset_stage()
 	# i lottatori esultano sull'arena come sfondo del menu
 	if map == "desert":
 		p1.reset(Vector2(-130, FLOOR_Y), 1)
@@ -736,6 +761,8 @@ func _start_match() -> void:
 func _start_round() -> void:
 	round_time = 99.0
 	_clear_actors()
+	if desert_perspective != null:
+		desert_perspective.reset_stage()
 	_reset_trees()  # nella foresta gli alberi abbattuti ricrescono a ogni round
 	if map == "desert":
 		p1.reset(Vector2(-130, FLOOR_Y), 1)
@@ -884,6 +911,19 @@ func _tick_phase(dt: float) -> void:
 				p1.st = 0.0
 				p1.aura.visible = true
 				sfx.play("charge", 0.85)
+			if dbg_beamtest_cpu and phase_t >= 0.4 and p2.state == Fighter.St.MOVE:
+				dbg_beamtest_cpu = false
+				p2.ki = 300.0
+				p2.state = Fighter.St.BEAM_CHARGE
+				p2.st = 0.0
+				p2.aura.visible = true
+				sfx.play("charge", 0.85)
+			if dbg_dinohit and desert_perspective.desert_dinosaur != null \
+					and is_instance_valid(desert_perspective.desert_dinosaur) \
+					and desert_perspective.desert_dinosaur.is_attacking():
+				dbg_dinohit = false
+				var dino = desert_perspective.desert_dinosaur
+				desert_perspective.hit_dinosaur(dino.hurt_rect(), 99.0, p1)
 			if dbg_divetest and phase_t >= 0.4 and p1.state == Fighter.St.MOVE:
 				dbg_divetest = false
 				p1.position = Vector2(500, 560)  # immerso nel lago
@@ -987,6 +1027,15 @@ func _physics_process(delta: float) -> void:
 	if paused:
 		return
 	_tick_shot(delta)
+	if desert_perspective != null:
+		desert_perspective.tick(delta)
+		# La sequenza usa i Tween per camera e lottatori. Fermare qui il clock
+		# di gioco impedisce a IA, timer e attacchi di interferire con la regia;
+		# gli effetti visivi gia' emessi continuano invece a dissolversi.
+		if desert_perspective.transition_active:
+			_tick_dynamic_actors(delta)
+			msg_t += delta
+			return
 	slow = move_toward(slow, slow_target, delta * 2.0)
 	var dt := delta * slow
 	msg_t += delta
@@ -1001,15 +1050,7 @@ func _physics_process(delta: float) -> void:
 		p1.tick(dt)
 		p2.tick(dt)
 		_push_apart()
-		for a in actors:
-			a.tick(dt)
-		var alive: Array = []
-		for a in actors:
-			if a.dead:
-				a.queue_free()
-			else:
-				alive.append(a)
-		actors = alive
+		_tick_dynamic_actors(dt)
 		# sequoie della foresta: ondeggiano, incassano e cadono col tempo
 		# di gioco (rispettano hitstop e slow-mo come ogni entita')
 		var t_alive: Array = []
@@ -1020,11 +1061,24 @@ func _physics_process(delta: float) -> void:
 			else:
 				t_alive.append(tr)
 		trees = t_alive
-	_tick_camera(delta)
+	if desert_perspective == null or not desert_perspective.transition_active:
+		_tick_camera(delta)
 	if phase == "fight" and round_num == 1 and wins == [0, 0] and phase_t < 7.0:
 		hint_a = 1.0
 	else:
 		hint_a = move_toward(hint_a, 0.0, delta * 1.5)
+
+
+func _tick_dynamic_actors(dt: float) -> void:
+	for actor in actors:
+		actor.tick(dt)
+	var alive: Array = []
+	for actor in actors:
+		if actor.dead:
+			actor.queue_free()
+		else:
+			alive.append(actor)
+	actors = alive
 
 
 func _tick_shot(delta: float) -> void:
@@ -1148,6 +1202,47 @@ func fighter_escaped(f: Fighter) -> void:
 
 # --- risoluzione dei colpi ---------------------------------------------------
 
+# Attacco ambientale del dinosauro: il simbolo di preavviso resta nel punto
+# scelto, quindi un Fighter che si allontana in tempo schiva il colpo. Parata,
+# invulnerabilita' e KO seguono le stesse regole del combattimento normale.
+func dinosaur_strike(target: Fighter, warned_pos: Vector2, source_pos: Vector2) -> bool:
+	if phase != "fight" or reconciling or target == null or target.invuln > 0.0:
+		return false
+	if target.state in [Fighter.St.DOWN, Fighter.St.KO]:
+		return false
+	if target.center().distance_to(warned_pos) > 82.0:
+		spawn_fx("spark_1", warned_pos, {"life": 0.28, "add": true, "grow": 1.5})
+		print("[dinosaur] attacco schivato da %s" % target.fighter_name)
+		return false
+	var direction := signf(target.position.x - source_pos.x)
+	if direction == 0.0:
+		direction = 1.0
+	if target.state == Fighter.St.GUARD:
+		target.take_block(2.5, Vector2(direction * 150.0, -20.0))
+		spawn_fx("spark_1", target.center(), {"life": 0.22, "add": true})
+		sfx.play("guard")
+		freeze_t = maxf(freeze_t, 0.04)
+		print("[dinosaur] attacco parato da %s" % target.fighter_name)
+		return true
+	target.take_hit(12.0, {"launch": Vector2(direction * 220.0, -175.0), "heavy": true})
+	spawn_fx("burst", target.center(), {"life": 0.32, "add": true, "screen": true})
+	spawn_fx("spark_0", target.center(), {"life": 0.28, "add": true, "grow": 2.2})
+	sfx.play("kick", 0.72)
+	freeze_t = maxf(freeze_t, 0.08)
+	shake(4.0)
+	if target.hp <= 0.0:
+		on_ko(target)
+	print("[dinosaur] %s colpito dall'attacco dallo sfondo" % target.fighter_name)
+	return true
+
+
+@rpc("authority", "call_local", "reliable")
+func net_dinosaur_strike(player_slot: int, warned_pos: Vector2, source_pos: Vector2) -> void:
+	if not online:
+		return
+	var target: Fighter = p1 if player_slot == 1 else p2
+	dinosaur_strike(target, warned_pos, source_pos)
+
 func try_hit(attacker: Fighter, r: Rect2, dmg: float, opts: Dictionary = {}) -> String:
 	# durante un replay di riconciliazione i colpi non vengono risolti:
 	# il danno reale e' gia' stato applicato dalla simulazione originale
@@ -1160,6 +1255,10 @@ func try_hit(attacker: Fighter, r: Rect2, dmg: float, opts: Dictionary = {}) -> 
 	for tr in trees:
 		if tr.hit_by(r, dmg, attacker.position.x):
 			tree_hit = true
+	# Il dinosauro e' vulnerabile soltanto nei pochi frame del suo ATTACKING.
+	var dinosaur_hit := false
+	if map == "desert" and desert_perspective != null:
+		dinosaur_hit = desert_perspective.hit_dinosaur(r, dmg, attacker)
 	var victim := attacker.enemy
 	# l'immagine-esca dell'avversario in copertura: colpirla la dissolve (e
 	# svela l'inganno) ma non fa alcun danno — vale come colpo andato a vuoto
@@ -1168,7 +1267,8 @@ func try_hit(attacker: Fighter, r: Rect2, dmg: float, opts: Dictionary = {}) -> 
 	if dec != null and r.intersects(dec.hurt_rect()):
 		dec.pop()
 		fake_hit = true
-	var no_hit := "tree" if tree_hit else ("decoy" if fake_hit else "miss")
+	var no_hit := "tree" if tree_hit else ("dinosaur" if dinosaur_hit \
+		else ("decoy" if fake_hit else "miss"))
 	if victim == null or victim.invuln > 0.0:
 		return no_hit
 	if victim.state in [Fighter.St.DOWN, Fighter.St.KO]:
@@ -1197,6 +1297,10 @@ func try_hit(attacker: Fighter, r: Rect2, dmg: float, opts: Dictionary = {}) -> 
 	sfx.play("kick" if heavy else "hit")
 	freeze_t = max(freeze_t, 0.10 if heavy else 0.05)
 	shake(3.0 if heavy else 1.2)
+	# Il raggio caricato di qualunque lottatore puo' aprire la seconda
+	# prospettiva; il controller decide in modo simmetrico attaccante/vittima.
+	if opts.get("desert_perspective", false) and desert_perspective != null:
+		desert_perspective.start_transition(attacker, victim)
 	if victim.hp <= 0.0:
 		on_ko(victim)
 	return "hit"

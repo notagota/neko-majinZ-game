@@ -1,5 +1,6 @@
 NEKO MAJIN Z — SUPERSONIC CLASH
 ================================
+Versione 1.5.0
 
 Come si gioca:
   1) Estrai TUTTO lo zip in una cartella (non solo l'exe!)

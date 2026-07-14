@@ -132,6 +132,12 @@ func _physics_process(dt: float) -> void:
 	if hello_t <= 0.0:
 		hello_t = 1.0
 		_net_ping.rpc(Time.get_ticks_msec())
+	# La cinematica falso 3D viene risolta deterministicamente su entrambi i
+	# peer. Durante i Tween fermiamo anche il clock del rollback: nessuno dei
+	# due lati deve accumulare input o risimulare il Fighter nascosto dallo
+	# sprite cinematografico. Ping e rilevamento disconnessione restano attivi.
+	if game.desert_perspective != null and game.desert_perspective.transition_active:
+		return
 	tick += 1
 	if game.phase != "fight":
 		barrier_tick = tick  # storia precedente non confrontabile (round nuovi ecc.)

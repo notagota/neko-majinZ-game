@@ -17,7 +17,20 @@ All'avvio un **menù** (con musica in loop) permette di scegliere tra:
 
 Scelta la modalità, una seconda schermata permette di **scegliere la mappa**:
 
-- **DESERTO ROCCIOSO** — l'arena classica tra le mesas;
+- **DESERTO ROCCIOSO** — l'arena classica tra le mesas. Il raggio caricato del Player
+  o dell'avversario che colpisce nella prima prospettiva scaglia la vittima contro la
+  `mesa_1.png` lontana usando il relativo sprite `z1|z2/hurt2_0.png`:
+  scala, posizione, camera e due composizioni `Node2D` dello stage vengono interpolate
+  via Tween, senza asset o nodi 3D. Dopo l'impatto si passa a una seconda arena laterale,
+  con l'attaccante a sinistra e `mesa_1.png` come muro destro; in questa fase torna il
+  volo verticale con W/S. Per 3 secondi effettivi dopo il recupero la vittima — Player,
+  CPU o secondo giocatore online — ha entrambi gli assi invertiti e tutti gli attacchi
+  bloccati. Il cambio si azzera a ogni round;
+  appena la vittima si riprende entra nello sfondo un **dinosauro interattivo**, più
+  grande dei lottatori. Usa `dinosaur_00..06` per l'ingresso, `07..09` per un attacco
+  telegrafato ogni 2 secondi, `27..30` per vagare orizzontalmente (specchiati andando a
+  destra) e `14..20` per fuggire risentito. Può essere colpito soltanto durante il suo
+  attacco; il colpo ambientale può essere schivato uscendo dal punto segnalato o parato;
 - **LAGO DELLA COSTA** — una spiaggia (sfondo rippato da `sshaohmarubg.gif`): la costa
   rocciosa a sinistra **scende a gradoni dolci** dentro un **lago profondo** che occupa
   tutto il lato destro, con il **fondale visibile** attraverso l'acqua. Chi si immerge
@@ -151,6 +164,8 @@ commentata, pronta per le credenziali di un relay TURN gratuito (es. Metered.ca 
 godot --path . -- --demo                 # IA contro IA (salta il menu)
 godot --path . -- --fastko               # CPU con 20 HP (test flusso KO)
 godot --path . -- --beamtest             # P1 spara il raggio subito
+godot --path . -- --perspectivecpu       # P2 spara il raggio a P1: test malus speculare
+godot --path . -- --dinohit              # Fase 2 + dinosauro colpito durante l'attacco
 godot --path . -- --training             # entra direttamente in allenamento
 godot --path . -- --lake                 # combattimento sulla mappa del lago
 godot --path . -- --divetest             # (col lago) P1 parte immerso: test stealth
@@ -175,6 +190,10 @@ serve a collaudare predizione e riconciliazioni, contate nei log ogni 5 secondi.
 ## Struttura
 
 - `scripts/game.gd` — direttore: menù, modalità, arena, round, colpi, camera, effetti, input map
+- `scripts/desert_perspective.gd` — regia falso 3D del deserto: Fase 1/Fase 2,
+  Tween di lancio e camera, `StaticBody2D` dei limiti e malus dei comandi
+- `scripts/desert_dinosaur.gd` — dinosauro ambientale della Fase 2: ingresso,
+  movimento, attacco telegrafato, vulnerabilità temporanea e fuga
 - `scripts/fighter.gd` — macchina a stati del lottatore (16 stati); `execute_inputs()` riceve i comandi di rete
 - `scripts/ai_controller.gd` / `human_controller.gd` / `dummy_controller.gd` / `net_controller.gd` — controller intercambiabili
 - `scripts/network_manager.gd` (autoload) — P2P WebRTC: signaling offer/answer/ICE in JSON,
